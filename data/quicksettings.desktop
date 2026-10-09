@@ -1,0 +1,7 @@
+[Xfce Panel]
+Type=X-XFCE-PanelPlugin
+Name=Quick Settings
+Comment=Minimal example panel plugin
+Icon=preferences-system-symbolic
+X-XFCE-Module=quicksettings
+X-XFCE-API=2.0
