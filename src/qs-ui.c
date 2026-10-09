@@ -202,7 +202,10 @@ make_meter (GtkWidget    *grid,
   GtkWidget *bar = gtk_progress_bar_new ();
 
   ui_add_class (card, "qs-card");
-  gtk_container_set_border_width (GTK_CONTAINER (card), QS_CONTENT_PAD);
+  /* Effective air matches themed buttons (e.g. Power page), whose theme
+   * adds button padding on top of the content token. */
+  gtk_container_set_border_width (GTK_CONTAINER (card),
+                                  QS_CONTENT_PAD + QS_INNER_GAP);
   ui_add_class (name_label, "qs-sub");
   gtk_widget_set_halign (name_label, GTK_ALIGN_START);
   gtk_widget_set_hexpand (name_label, TRUE);
