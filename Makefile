@@ -14,7 +14,7 @@ CFLAGS += $(shell $(PKG_CONFIG) --cflags gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2
 LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0)
 
 SRC = src/qs-plugin.c src/qs-util.c src/qs-ui.c src/qs-audio.c \
-      src/qs-display.c src/qs-net.c src/qs-power.c
+      src/qs-display.c src/qs-net.c src/qs-power.c src/qs-session.c
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean install uninstall

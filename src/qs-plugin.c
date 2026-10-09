@@ -4,6 +4,7 @@
 #include "qs-display.h"
 #include "qs-net.h"
 #include "qs-power.h"
+#include "qs-session.h"
 
 void
 qs_ref (QuickSettings *qs)
@@ -186,6 +187,8 @@ construct_quick_settings (XfcePanelPlugin *plugin)
 
   /* Battery group carries its own separator (hidden with the section). */
   power_build_section (box, qs);
+
+  session_build_section (box, qs->stack, qs);
 
   g_signal_connect (qs->button, "clicked", G_CALLBACK (on_button_clicked), qs);
   g_signal_connect (plugin, "size-changed", G_CALLBACK (on_size_changed), qs);
