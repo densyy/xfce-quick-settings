@@ -887,9 +887,76 @@ net_update_tiles (QuickSettings *qs)
   qs->wifi_on = wifi_available () ? wifi_enabled () : FALSE;
   set_tile_active (qs->wifi_tile, qs->wifi_on);
   gtk_widget_set_sensitive (qs->wifi_tile, wifi_available ());
-  /* Bluetooth state is cached: a live check may block without the daemon. */
+  /* Bluetooth state is live-probed async on popup open (see below):
+   * a sync check here may block without the daemon. Show the last
+   * known state now; the probe corrects it moments later. */
   set_tile_active (qs->bt_tile, qs->bt_on);
   gtk_widget_set_sensitive (qs->bt_tile, command_exists ("bluetoothctl"));
+}
+
+/* --- Bluetooth tile live probe (non-blocking) ---
+ * Refreshes the tile (+ switch) from the real controller state every
+ * time the popup opens, without stalling it when bluetoothd is down. */
+
+typedef struct
+{
+  QuickSettings *qs;
+  gchar         *controller; /* owned MAC or NULL */
+  gboolean       powered;
+} BtTileProbe;
+
+static gboolean
+bt_tile_probe_idle (gpointer data)
+{
+  BtTileProbe   *p = data;
+  QuickSettings *qs = p->qs;
+
+  qs->bt_tile_probe = FALSE;
+  /* A full page load owns the widgets while it runs; it updates the
+   * tile itself when done. */
+  if (!qs->dead && !qs->scanning_bt)
+    {
+      g_free (qs->bt_controller);
+      qs->bt_controller = p->controller;
+      p->controller = NULL;
+      qs->bt_on = (qs->bt_controller != NULL && p->powered);
+      qs->updating = TRUE;
+      gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), qs->bt_on);
+      qs->updating = FALSE;
+      set_tile_active (qs->bt_tile, qs->bt_on);
+    }
+  g_free (p->controller);
+  g_free (p);
+  qs_unref (qs);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+bt_tile_probe_thread (gpointer data)
+{
+  BtTileProbe *p = data;
+
+  p->controller = bt_get_controller ();
+  if (p->controller != NULL)
+    p->powered = bt_powered (p->controller);
+  g_idle_add (bt_tile_probe_idle, p);
+  return NULL;
+}
+
+void
+net_refresh_bt_tile (QuickSettings *qs)
+{
+  BtTileProbe *p;
+
+  if (!command_exists ("bluetoothctl"))
+    return;
+  if (qs->bt_tile_probe || qs->scanning_bt)
+    return;
+  qs->bt_tile_probe = TRUE;
+  p = g_new0 (BtTileProbe, 1);
+  p->qs = qs;
+  qs_ref (qs);
+  g_thread_unref (g_thread_new ("qs-bt-tile", bt_tile_probe_thread, p));
 }
 
 static void

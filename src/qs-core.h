@@ -43,10 +43,12 @@ typedef struct
   guint64          sysmon_prev_total;
   guint64          sysmon_prev_idle;
   gboolean         sysmon_have_prev;
-  gboolean         wifi_on;  gboolean         bt_on; /* cached: live check may block without daemon */
+  gboolean         wifi_on;
+  gboolean         bt_on; /* live-probed on popup open (async, see qs-net) */
   gchar           *bt_controller; /* owned MAC or NULL */
   gboolean         scanning_wifi;
   gboolean         scanning_bt;
+  gboolean         bt_tile_probe; /* tile-only BT probe in flight */
   gboolean         updating; /* TRUE while loading current values */
   gint             refcount; /* async ops hold a ref; free at zero */
   gboolean         dead; /* TRUE after free-data: don't touch widgets */

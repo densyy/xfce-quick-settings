@@ -96,6 +96,7 @@ on_button_clicked (GtkButton *button,
   display_refresh_brightness (qs);
   audio_refresh_devices (qs);
   net_update_tiles (qs);
+  net_refresh_bt_tile (qs); /* async: corrects the BT tile once probed */
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
   gtk_widget_show_all (qs->popup);
   power_refresh (qs); /* after show_all: may hide the battery section */
@@ -206,6 +207,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   display_refresh_brightness (qs);
   audio_refresh_devices (qs);
   net_update_tiles (qs);
+  net_refresh_bt_tile (qs);
   power_refresh (qs);
 
   gtk_widget_show_all (GTK_WIDGET (plugin));
