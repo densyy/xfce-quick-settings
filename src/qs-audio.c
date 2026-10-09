@@ -653,7 +653,7 @@ on_audio_back_clicked (GtkButton *button,
 void
 audio_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *audio_tile;
   GtkWidget *audio_page;
   GtkWidget *audio_grid;
@@ -674,8 +674,8 @@ audio_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
   /* Sub-page with the output/input selectors. */
   audio_page = make_sub_page ("Audio devices", &audio_back);
   audio_grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (audio_grid), 8);
-  gtk_grid_set_column_spacing (GTK_GRID (audio_grid), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (audio_grid), 12);
+  gtk_grid_set_column_spacing (GTK_GRID (audio_grid), 12);
   gtk_box_pack_start (GTK_BOX (audio_page), audio_grid, FALSE, FALSE, 0);
   qs->sink_combo = make_device_row (audio_grid, 0, "audio-speakers-symbolic",
                                     "Audio output device");

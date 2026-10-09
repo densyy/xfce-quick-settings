@@ -224,8 +224,8 @@ sysmon_refresh (QuickSettings *qs)
   /* Disks: rebuild the rows (partitions may come and go). */
   clear_list_box (qs->sysmon_disk_box);
   disk_grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (disk_grid), 8);
-  gtk_grid_set_column_spacing (GTK_GRID (disk_grid), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (disk_grid), 12);
+  gtk_grid_set_column_spacing (GTK_GRID (disk_grid), 12);
   gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), disk_grid, FALSE, FALSE, 0);
   if (g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
     {
@@ -377,8 +377,8 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   /* Sub-page: RAM + CPU meters, then one meter per partition. */
   page = make_sub_page ("System", &back);
   content = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (content), 8);
-  gtk_grid_set_column_spacing (GTK_GRID (content), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (content), 12);
+  gtk_grid_set_column_spacing (GTK_GRID (content), 12);
   gtk_box_pack_start (GTK_BOX (page), content, FALSE, FALSE, 0);
   qs->sysmon_ram_bar = add_meter (content, 0, "RAM");
   qs->sysmon_cpu_bar = add_meter (content, 1, "CPU");

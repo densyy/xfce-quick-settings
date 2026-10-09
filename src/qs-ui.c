@@ -20,8 +20,8 @@ make_group (GtkWidget   *box,
   g_free (markup);
 
   grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
-  gtk_grid_set_column_spacing (GTK_GRID (grid), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (grid), 12);
+  gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
   gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
 
   return grid;
@@ -32,8 +32,8 @@ make_plain_grid (GtkWidget *box)
 {
   GtkWidget *grid = gtk_grid_new ();
 
-  gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
-  gtk_grid_set_column_spacing (GTK_GRID (grid), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (grid), 12);
+  gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
   gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
 
   return grid;
@@ -117,7 +117,7 @@ build_device_page (const gchar *title,
                    GtkWidget  **status_out,
                    GtkWidget  **back_out)
 {
-  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   GtkWidget *back = gtk_button_new_from_icon_name ("go-previous-symbolic",
                                                    GTK_ICON_SIZE_BUTTON);
@@ -204,7 +204,7 @@ GtkWidget *
 make_sub_page (const gchar *title,
                GtkWidget  **back_out)
 {
-  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   GtkWidget *back = gtk_button_new_from_icon_name ("go-previous-symbolic",
                                                    GTK_ICON_SIZE_BUTTON);

@@ -106,7 +106,7 @@ session_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 
   /* Sub-page with the session actions. */
   power_page = make_sub_page ("Power", &power_back);
-  action_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  action_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   gtk_box_set_homogeneous (GTK_BOX (action_box), TRUE);
   gtk_box_pack_start (GTK_BOX (power_page), action_box, FALSE, FALSE, 0);
   make_power_button (action_box, "system-shutdown-symbolic",

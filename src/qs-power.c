@@ -252,7 +252,7 @@ power_build_section (GtkWidget *box, QuickSettings *qs)
   GtkWidget *bat_grid;
   GtkWidget *bat_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
 
-  qs->bat_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  qs->bat_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   gtk_box_pack_start (GTK_BOX (box), qs->bat_box, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (qs->bat_box), bat_sep, FALSE, FALSE, 2);
   bat_grid = make_group (qs->bat_box, "Battery");

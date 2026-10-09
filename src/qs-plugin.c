@@ -170,7 +170,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
                                  GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT_RIGHT);
   gtk_container_add (GTK_CONTAINER (qs->popup), qs->stack);
 
-  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   gtk_container_set_border_width (GTK_CONTAINER (box), 12);
   gtk_stack_add_named (GTK_STACK (qs->stack), box, "main");
 

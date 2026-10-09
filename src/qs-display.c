@@ -313,7 +313,7 @@ on_night_back_clicked (GtkButton *button,
 void
 display_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *night_tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *night_tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *night_tile;
   GtkWidget *night_page;
   GtkWidget *preset_box;
@@ -333,7 +333,7 @@ display_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
 
   /* Sub-page with the color temperature presets. */
   night_page = make_sub_page ("Night Light", &night_back);
-  preset_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  preset_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
   gtk_box_set_homogeneous (GTK_BOX (preset_box), TRUE);
   gtk_box_pack_start (GTK_BOX (night_page), preset_box, FALSE, FALSE, 0);
   qs->night_day = make_night_button (preset_box, "weather-clear-symbolic",

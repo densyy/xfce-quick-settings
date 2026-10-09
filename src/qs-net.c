@@ -992,7 +992,7 @@ void
 net_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *conn_grid = make_group (box, "Connection");
-  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
   GtkWidget *wifi_page;
   GtkWidget *bt_page;
   GtkWidget *wifi_back;
