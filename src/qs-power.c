@@ -209,7 +209,14 @@ power_refresh (QuickSettings *qs)
     ok = get_battery_sysfs (&percent, &state, &time);
   if (!ok || percent < 0)
     {
-      gtk_widget_hide (qs->bat_box);
+      gtk_widget_show_all (qs->bat_box);
+      gtk_image_set_from_icon_name (GTK_IMAGE (qs->bat_icon),
+                                    "battery-missing-symbolic",
+                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
+      gtk_label_set_text (GTK_LABEL (qs->bat_label), "—");
+      gtk_label_set_text (GTK_LABEL (qs->bat_status),
+                          "No battery detected");
+      gtk_widget_set_sensitive (qs->bat_box, FALSE);
       g_free (state);
       g_free (time);
       return;
@@ -217,6 +224,7 @@ power_refresh (QuickSettings *qs)
   percent = CLAMP (percent, 0, 100);
   charging = (state != NULL && g_ascii_strcasecmp (state, "charging") == 0);
   gtk_widget_show_all (qs->bat_box);
+  gtk_widget_set_sensitive (qs->bat_box, TRUE);
   gtk_image_set_from_icon_name (GTK_IMAGE (qs->bat_icon),
                                 battery_icon_for_level (percent, charging),
                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
@@ -262,8 +270,8 @@ power_tick (gpointer data)
       return G_SOURCE_REMOVE;
     }
   power_refresh (qs);
-  /* Battery vanished (or never existed): don't poll in the background. */
-  if (!gtk_widget_get_visible (qs->bat_box))
+  /* No battery: keep the section visible but disabled, without polling. */
+  if (!gtk_widget_get_sensitive (qs->bat_box))
     {
       qs->power_timer = 0;
       return G_SOURCE_REMOVE;
@@ -285,7 +293,7 @@ void
 power_start (QuickSettings *qs)
 {
   power_refresh (qs);
-  if (gtk_widget_get_visible (qs->bat_box) && qs->power_timer == 0)
+  if (gtk_widget_get_sensitive (qs->bat_box) && qs->power_timer == 0)
     qs->power_timer = g_timeout_add_seconds (POWER_INTERVAL_S,
                                              power_tick, qs);
 }

@@ -100,7 +100,7 @@ on_button_clicked (GtkButton *button,
   notify_update_tile (qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
   gtk_widget_show_all (qs->popup);
-  power_start (qs); /* after show_all: starts the 30s timer if visible */
+  power_start (qs); /* after show_all: 30s timer only with a battery */
   while (gtk_events_pending ())
     gtk_main_iteration ();
   position_popup (qs);

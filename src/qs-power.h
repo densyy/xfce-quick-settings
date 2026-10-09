@@ -5,7 +5,7 @@
 
 /* Builds the Battery group (hidden when no battery is present). */
 void power_build_section (GtkWidget *box, QuickSettings *qs);
-/* Refresh icon + label; hides the whole section when no battery exists. */
+/* Refresh icon + label; disables the section when no battery exists. */
 void power_refresh (QuickSettings *qs);
 /* One refresh + starts the 30s timer (no-op when hidden or running). */
 void power_start (QuickSettings *qs);
