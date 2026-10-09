@@ -10,13 +10,21 @@ fi
 echo "Installing build dependencies..."
 if command -v apt-get >/dev/null 2>&1; then
   $SUDO apt-get update
-  $SUDO apt-get install -y \
+  # Repair broken third-party deps first: apt refuses new installs while
+  # held/broken packages exist (e.g. rustdesk blocking the chain above).
+  $SUDO apt-get install -y -f || true
+  if ! $SUDO apt-get install -y \
     build-essential \
     pkg-config \
     libgtk-3-dev \
     libxfce4panel-2.0-dev \
     libxfce4ui-2-dev \
-    libxfce4util-dev
+    libxfce4util-dev; then
+    echo "Dependency install failed."
+    echo "Repair manually with: sudo apt --fix-broken install"
+    echo "If a third-party package blocks it (see the error above), remove it first, e.g.: sudo apt remove rustdesk"
+    exit 1
+  fi
 elif command -v pacman >/dev/null 2>&1; then
   $SUDO pacman -Sy --needed --noconfirm \
     base-devel \
