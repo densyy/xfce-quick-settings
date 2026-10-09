@@ -6,13 +6,16 @@
 /* One disk entry: display name + preformatted "used / total · pct" text. */
 typedef struct
 {
-  gchar *name;
-  gchar *text;
+  gchar   *name;
+  gchar   *text; /* preformatted "used / total · pct" */
+  gdouble  fraction; /* used / total, 0-1 */
 } SysmonDisk;
 
 /* Builds the System tile + an empty sub-page (layout removed; the fresh
  * component goes here). */
 void sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs);
+/* Stops the refresh timer (safe to call when already stopped). */
+void sysmon_stop (QuickSettings *qs);
 /* Data layer (kept, no widgets): memory in kB, CPU 0-100, disks as a
  * SysmonDisk list (free with sysmon_free_disks). */
 gboolean sysmon_read_memory (guint64 *total_kb,

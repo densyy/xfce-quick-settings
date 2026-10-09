@@ -43,6 +43,13 @@ typedef struct
   guint            power_timer; /* 30s refresh, only while popup is open */
   GtkWidget       *notify_list;
   GtkWidget       *notify_clear;
+  GtkWidget       *sysmon_ram_value;
+  GtkWidget       *sysmon_ram_bar;
+  GtkWidget       *sysmon_cpu_value;
+  GtkWidget       *sysmon_cpu_bar;
+  GtkWidget       *sysmon_disk_box;
+  gchar           *sysmon_disk_key; /* rebuild disk blocks only on change */
+  guint            sysmon_timer;
   guint64          sysmon_prev_total;
   guint64          sysmon_prev_idle;
   gboolean         sysmon_have_prev;

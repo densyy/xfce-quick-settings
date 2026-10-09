@@ -20,6 +20,7 @@ qs_unref (QuickSettings *qs)
   if (g_atomic_int_dec_and_test (&qs->refcount))
     {
       g_free (qs->bt_controller);
+      g_free (qs->sysmon_disk_key);
       g_free (qs);
     }
 }
@@ -129,6 +130,7 @@ quick_settings_free (XfcePanelPlugin *plugin,
   (void) plugin;
 
   qs->dead = TRUE;
+  sysmon_stop (qs);
   power_stop (qs);
   gtk_widget_destroy (qs->popup);
   qs_unref (qs);
