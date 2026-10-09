@@ -110,13 +110,21 @@ static GtkWidget *
 make_notice_row (Notice *n)
 {
   GtkWidget *row = gtk_list_box_row_new ();
-  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
   GtkWidget *title;
   GtkWidget *sub;
   gchar     *esc;
   gchar     *markup;
   gchar     *time;
   gchar     *sub_text;
+
+  gtk_style_context_add_class (gtk_widget_get_style_context (row),
+                               "qs-card");
+  gtk_widget_set_margin_top (row, 4);
+  gtk_widget_set_margin_bottom (row, 4);
+  gtk_widget_set_margin_start (row, 8);
+  gtk_widget_set_margin_end (row, 8);
+  gtk_container_set_border_width (GTK_CONTAINER (vbox), 6);
 
   esc = g_markup_escape_text (n->summary != NULL && *n->summary != '\0'
                               ? n->summary : n->app, -1);
@@ -255,6 +263,8 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_widget_set_size_request (scroll, -1, 280);
   qs->notify_list = gtk_list_box_new ();
+  gtk_list_box_set_selection_mode (GTK_LIST_BOX (qs->notify_list),
+                                   GTK_SELECTION_NONE);
   gtk_container_add (GTK_CONTAINER (scroll), qs->notify_list);
   gtk_box_pack_start (GTK_BOX (page), scroll, TRUE, TRUE, 0);
   qs->notify_clear = gtk_button_new_with_label ("Clear");
