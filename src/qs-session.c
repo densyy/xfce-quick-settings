@@ -80,7 +80,7 @@ make_power_button (GtkWidget   *box,
   gtk_box_pack_start (GTK_BOX (hbox), image, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (hbox), text, FALSE, FALSE, 0);
   gtk_container_add (GTK_CONTAINER (button), hbox);
-  gtk_widget_set_halign (hbox, GTK_ALIGN_CENTER);
+  gtk_widget_set_halign (hbox, GTK_ALIGN_START);
   g_object_set_data (G_OBJECT (button), "qs-action", (gpointer) action);
   g_signal_connect (button, "clicked",
                     G_CALLBACK (on_power_action_clicked), NULL);
