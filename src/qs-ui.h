@@ -52,13 +52,13 @@ GtkWidget *make_mini_tile (GtkWidget    *box,
                            const gchar  *icon_name,
                            const gchar  *title,
                            GtkWidget   **sub_out);
-/* Meter card: name + value header with a thin bar below. Fills bar_out
- * and value_out (both may be NULL). */
-void make_meter (GtkWidget    *grid,
-                 gint          row,
-                 const gchar  *name,
-                 GtkWidget   **value_out,
-                 GtkWidget   **bar_out);
+/* Stat card: single qs-card box holding key/value rows (no bars).
+ * Returns the card; pack rows into it with make_stat_row. */
+GtkWidget *make_stat_card (GtkWidget *grid,
+                           gint       row);
+void make_stat_row (GtkWidget    *card,
+                    const gchar  *name,
+                    GtkWidget   **value_out);
 /* Generic sub-page: header (back + title + switch), scan button,
  * scrollable list, status line. */
 GtkWidget *build_device_page (const gchar *title,

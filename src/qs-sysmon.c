@@ -4,7 +4,7 @@
 
 #include <sys/statvfs.h>
 
-#define SYSMON_INTERVAL_S 5
+#define SYSMON_INTERVAL_S 10
 
 /* Pseudo-filesystems never shown as disks. */
 static const gchar *skip_fs[] = {
@@ -128,11 +128,15 @@ read_cpu_percent (QuickSettings *qs)
 }
 
 static gchar *
-gb_text (guint64 bytes,
-         guint64 total)
+bytes_text (guint64 bytes,
+            guint64 total)
 {
-  return g_strdup_printf ("%.1f / %.1f GB",
-                          bytes / 1073741824.0, total / 1073741824.0);
+  gdouble pct = (total == 0) ? 0.0
+                             : 100.0 * (gdouble) bytes / (gdouble) total;
+
+  return g_strdup_printf ("%.1f / %.1f GB · %d%%",
+                          bytes / 1073741824.0, total / 1073741824.0,
+                          (gint) (pct + 0.5));
 }
 
 /* /proc/mounts escapes space/tab/newline/backslash as octal. */
@@ -177,17 +181,13 @@ sysmon_refresh (QuickSettings *qs)
   gchar   *content = NULL;
   gchar  **lines;
   gint     i;
-  gint     row = 0;
-  GtkWidget *disk_grid;
 
-  /* RAM + CPU meters (fixed rows). */
+  /* RAM + CPU: update the value labels in place (no widget churn). */
   if (read_meminfo (&total_kb, &avail_kb) && total_kb > 0)
     {
       used_bytes = (total_kb - MIN (avail_kb, total_kb)) * 1024;
       total_bytes = total_kb * 1024;
-      text = gb_text (used_bytes, total_bytes);
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_ram_bar),
-                                     (gdouble) used_bytes / (gdouble) total_bytes);
+      text = bytes_text (used_bytes, total_bytes);
       gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
       g_free (text);
     }
@@ -195,92 +195,126 @@ sysmon_refresh (QuickSettings *qs)
   if (cpu >= 0.0)
     {
       text = g_strdup_printf ("%d%%", (gint) (cpu + 0.5));
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar),
-                                     cpu / 100.0);
       gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value), text);
       g_free (text);
     }
 
-  /* Disks: rebuild the rows (partitions may come and go). */
-  clear_list_box (qs->sysmon_disk_box);
-  disk_grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (disk_grid), QS_INNER_GAP);
-  gtk_grid_set_column_spacing (GTK_GRID (disk_grid), QS_PAGE_PAD);
-  gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), disk_grid, FALSE, FALSE, 0);
-  if (g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
-    {
-      /* One row per device: the same partition often appears under
-       * several mount points (bind mounts, btrfs subvolumes). */
-      GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                                g_free, NULL);
+  /* Disks: gather the data first, then only touch widgets when the
+   * device set changed; otherwise update the value labels in place. */
+  {
+    GPtrArray *names = g_ptr_array_new_with_free_func (g_free);
+    GPtrArray *texts = g_ptr_array_new_with_free_func (g_free);
+    GString   *key = g_string_new (NULL);
 
-      lines = g_strsplit (content, "\n", -1);
-      g_free (content);
-      for (i = 0; lines[i] != NULL; i++)
-        {
-          gchar **parts = g_strsplit (lines[i], " ", 4);
-          struct statvfs st;
-          guint64 total;
-          guint64 used;
-          gchar *device;
-          gchar *target;
-          const gchar *base;
-          gchar *name;
+    if (g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
+      {
+        /* One row per device: the same partition often appears under
+         * several mount points (bind mounts, btrfs subvolumes). */
+        GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                  g_free, NULL);
 
-          if (g_strv_length (parts) < 3)
-            {
-              g_strfreev (parts);
-              continue;
-            }
-          device = unescape_mount (parts[0]);
-          target = unescape_mount (parts[1]);
-          if (fs_skipped (parts[2], device)
-              || statvfs (target, &st) != 0
-              || st.f_blocks == 0
-              || st.f_frsize == 0
-              || g_hash_table_contains (seen, device))
-            {
-              g_free (device);
-              g_free (target);
-              g_strfreev (parts);
-              continue;
-            }
-          g_hash_table_add (seen, g_strdup (device));
-          total = (guint64) st.f_blocks * st.f_frsize;
-          used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
-          base = device;
-          if (g_str_has_prefix (device, "/dev/"))
-            base += strlen ("/dev/");
-          name = g_strdup (base);
-          g_free (device);
-          g_free (target);
+        lines = g_strsplit (content, "\n", -1);
+        g_free (content);
+        content = NULL;
+        for (i = 0; lines[i] != NULL; i++)
           {
-            GtkWidget *value = NULL;
-            GtkWidget *bar = NULL;
+            gchar **parts = g_strsplit (lines[i], " ", 4);
+            struct statvfs st;
+            guint64 total;
+            guint64 used;
+            gchar *device;
+            gchar *target;
+            const gchar *base;
 
-            make_meter (disk_grid, row++, name, &value, &bar);
-            text = gb_text (used, total);
-            gtk_label_set_text (GTK_LABEL (value), text);
-            g_free (text);
-            gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                           total == 0 ? 0.0
-                                           : (gdouble) used / (gdouble) total);
+            if (g_strv_length (parts) < 3)
+              {
+                g_strfreev (parts);
+                continue;
+              }
+            device = unescape_mount (parts[0]);
+            target = unescape_mount (parts[1]);
+            if (fs_skipped (parts[2], device)
+                || statvfs (target, &st) != 0
+                || st.f_blocks == 0
+                || st.f_frsize == 0
+                || g_hash_table_contains (seen, device))
+              {
+                g_free (device);
+                g_free (target);
+                g_strfreev (parts);
+                continue;
+              }
+            g_hash_table_add (seen, g_strdup (device));
+            total = (guint64) st.f_blocks * st.f_frsize;
+            used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
+            base = device;
+            if (g_str_has_prefix (device, "/dev/"))
+              base += strlen ("/dev/");
+            g_string_append (key, device);
+            g_string_append_c (key, '|');
+            g_ptr_array_add (names, g_strdup (base));
+            g_ptr_array_add (texts, bytes_text (used, total));
+            g_free (device);
+            g_free (target);
+            g_strfreev (parts);
           }
-          g_free (name);
-          g_strfreev (parts);
-        }
-      g_strfreev (lines);
-      g_hash_table_destroy (seen);
-    }
-  if (row == 0)
-    {
-      GtkWidget *empty = gtk_label_new ("No disks found");
+        g_strfreev (lines);
+        g_hash_table_destroy (seen);
+      }
 
-      ui_add_class (empty, "qs-status");
-      gtk_widget_set_halign (empty, GTK_ALIGN_START);
-      gtk_grid_attach (GTK_GRID (disk_grid), empty, 0, 0, 2, 1);
-    }
-  gtk_widget_show_all (qs->sysmon_disk_box);
+    if (g_strcmp0 (key->str, qs->sysmon_disk_key) == 0)
+      {
+        /* Same devices: refresh the values in place. */
+        GList *rows = gtk_container_get_children (GTK_CONTAINER (qs->sysmon_disk_box));
+        GList *l;
+        guint  idx = 0;
+
+        for (l = rows; l != NULL && idx < texts->len; l = l->next, idx++)
+          {
+            GList     *cols = gtk_container_get_children (GTK_CONTAINER (l->data));
+            GtkWidget *value = GTK_WIDGET (g_list_last (cols)->data);
+
+            if (GTK_IS_LABEL (value))
+              gtk_label_set_text (GTK_LABEL (value),
+                                  g_ptr_array_index (texts, idx));
+            g_list_free (cols);
+          }
+        g_list_free (rows);
+        g_string_free (key, TRUE);
+      }
+    else
+      {
+        guint idx;
+
+        clear_list_box (qs->sysmon_disk_box);
+        if (names->len == 0)
+          {
+            GtkWidget *empty = gtk_label_new ("No disks found");
+
+            ui_add_class (empty, "qs-status");
+            gtk_widget_set_halign (empty, GTK_ALIGN_START);
+            gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), empty,
+                                FALSE, FALSE, 0);
+          }
+        else
+          {
+            for (idx = 0; idx < names->len; idx++)
+              {
+                GtkWidget *value = NULL;
+
+                make_stat_row (qs->sysmon_disk_box,
+                               g_ptr_array_index (names, idx), &value);
+                gtk_label_set_text (GTK_LABEL (value),
+                                    g_ptr_array_index (texts, idx));
+              }
+          }
+        g_free (qs->sysmon_disk_key);
+        qs->sysmon_disk_key = g_string_free (key, FALSE);
+        gtk_widget_show_all (qs->sysmon_disk_box);
+      }
+    g_ptr_array_free (names, TRUE);
+    g_ptr_array_free (texts, TRUE);
+  }
 }
 
 static gboolean
@@ -346,6 +380,7 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   GtkWidget *sys_tile;
   GtkWidget *page;
   GtkWidget *content;
+  GtkWidget *monitor_card;
   GtkWidget *disks_grid;
   GtkWidget *back;
 
@@ -354,16 +389,15 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);
 
-  /* Sub-page: RAM + CPU meter cards, then one card per disk. */
+  /* Sub-page: one stat card for Monitor, one for Disks. Values are
+   * plain labels updated in place (no progress bars). */
   page = make_sub_page ("System", &back);
   content = make_group (page, "Monitor");
-  make_meter (content, 0, "Memory",
-              &qs->sysmon_ram_value, &qs->sysmon_ram_bar);
-  make_meter (content, 1, "Processor",
-              &qs->sysmon_cpu_value, &qs->sysmon_cpu_bar);
+  monitor_card = make_stat_card (content, 0);
+  make_stat_row (monitor_card, "Memory", &qs->sysmon_ram_value);
+  make_stat_row (monitor_card, "Processor", &qs->sysmon_cpu_value);
   disks_grid = make_group (page, "Disks");
-  qs->sysmon_disk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
-  gtk_grid_attach (GTK_GRID (disks_grid), qs->sysmon_disk_box, 0, 0, 2, 1);
+  qs->sysmon_disk_box = make_stat_card (disks_grid, 0);
   gtk_stack_add_named (GTK_STACK (stack), page, "sysmon");
   g_signal_connect (back, "clicked",
                     G_CALLBACK (on_sysmon_back_clicked), qs);

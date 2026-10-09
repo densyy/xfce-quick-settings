@@ -187,43 +187,41 @@ make_mini_tile (GtkWidget    *box,
   return button;
 }
 
-/* Meter card: dim name + bold value header, thin bar below. */
-void
-make_meter (GtkWidget    *grid,
-            gint          row,
-            const gchar  *name,
-            GtkWidget   **value_out,
-            GtkWidget   **bar_out)
+/* Stat card: one qs-card box holding plain key/value rows. Values are
+ * updated in place with gtk_label_set_text: no bars, no widget churn. */
+GtkWidget *
+make_stat_card (GtkWidget *grid,
+                gint       row)
 {
   GtkWidget *card = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
-  GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
-  GtkWidget *name_label = gtk_label_new (name);
-  GtkWidget *value = gtk_label_new ("—");
-  GtkWidget *bar = gtk_progress_bar_new ();
 
   ui_add_class (card, "qs-card");
-  /* Effective air matches themed buttons (e.g. Power page), whose theme
-   * adds button padding on top of the content token. */
-  gtk_container_set_border_width (GTK_CONTAINER (card),
-                                  QS_CONTENT_PAD + QS_INNER_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (card), QS_CONTENT_PAD);
+  gtk_grid_attach (GTK_GRID (grid), card, 0, row, 2, 1);
+  return card;
+}
+
+void
+make_stat_row (GtkWidget    *card,
+               const gchar  *name,
+               GtkWidget   **value_out)
+{
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
+  GtkWidget *name_label = gtk_label_new (name);
+  GtkWidget *value = gtk_label_new ("—");
+
   ui_add_class (name_label, "qs-sub");
   gtk_widget_set_halign (name_label, GTK_ALIGN_START);
   gtk_widget_set_hexpand (name_label, TRUE);
+  gtk_label_set_ellipsize (GTK_LABEL (name_label), PANGO_ELLIPSIZE_END);
   ui_add_class (value, "qs-title");
   gtk_widget_set_halign (value, GTK_ALIGN_END);
-  gtk_box_pack_start (GTK_BOX (header), name_label, TRUE, TRUE, 0);
-  gtk_box_pack_start (GTK_BOX (header), value, FALSE, FALSE, 0);
-  ui_add_class (bar, "qs-meter");
-  gtk_progress_bar_set_show_text (GTK_PROGRESS_BAR (bar), FALSE);
-  gtk_widget_set_hexpand (bar, TRUE);
-  gtk_box_pack_start (GTK_BOX (card), header, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (card), bar, FALSE, FALSE, 0);
-  gtk_grid_attach (GTK_GRID (grid), card, 0, row, 2, 1);
+  gtk_box_pack_start (GTK_BOX (row), name_label, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (row), value, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (card), row, FALSE, FALSE, 0);
 
   if (value_out != NULL)
     *value_out = value;
-  if (bar_out != NULL)
-    *bar_out = bar;
 }
 
 /* Generic sub-page: header (back + title + switch), scan button,
@@ -354,9 +352,6 @@ ui_load_css (void)
     " background-color: @theme_selected_bg_color; border: none; }"
     "scale.qs-slider slider { min-width: 16px; min-height: 16px;"
     " border-radius: 999px; }"
-    ".qs-meter trough { min-height: 8px; border-radius: 4px; }"
-    ".qs-meter trough progress { min-height: 8px; border-radius: 4px;"
-    " background-color: @theme_selected_bg_color; border: none; }"
     ".qs-combo { min-height: 40px; }", -1, NULL);
   gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
     GTK_STYLE_PROVIDER (provider),
