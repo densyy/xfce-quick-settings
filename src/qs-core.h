@@ -19,7 +19,11 @@ typedef struct
   gint             audio_backend; /* AudioBackend, see qs-audio.h */
   GtkWidget       *stack;
   GtkWidget       *wifi_tile;
+  GtkWidget       *wifi_sub;
   GtkWidget       *bt_tile;
+  GtkWidget       *bt_sub;
+  GtkWidget       *audio_sub;
+  GtkWidget       *notify_sub;
   GtkWidget       *wifi_switch;
   GtkWidget       *wifi_list;
   GtkWidget       *wifi_scan;
@@ -35,10 +39,13 @@ typedef struct
   GtkWidget       *bat_box;
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;
+  GtkWidget       *bat_status;
   GtkWidget       *notify_list;
   GtkWidget       *notify_clear;
   GtkWidget       *sysmon_ram_bar;
+  GtkWidget       *sysmon_ram_value;
   GtkWidget       *sysmon_cpu_bar;
+  GtkWidget       *sysmon_cpu_value;
   GtkWidget       *sysmon_disk_box;
   guint            sysmon_timer;
   guint64          sysmon_prev_total;

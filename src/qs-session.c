@@ -72,11 +72,14 @@ make_power_button (GtkWidget   *box,
                    const gchar *action)
 {
   GtkWidget *button = gtk_button_new ();
-  GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
   GtkWidget *image = gtk_image_new_from_icon_name (icon_name,
                                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
   GtkWidget *text = gtk_label_new (label);
 
+  ui_add_class (button, "qs-btn");
+  gtk_image_set_pixel_size (GTK_IMAGE (image), QS_ROW_ICON_PX);
+  ui_add_class (text, "qs-title");
   gtk_box_pack_start (GTK_BOX (hbox), image, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (hbox), text, FALSE, FALSE, 0);
   gtk_container_add (GTK_CONTAINER (button), hbox);
@@ -90,23 +93,19 @@ make_power_button (GtkWidget   *box,
 void
 session_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *power_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  GtkWidget *power_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   GtkWidget *power_tile;
   GtkWidget *power_page;
   GtkWidget *action_box;
   GtkWidget *power_back;
 
-  /* Full-width tile at the bottom of the main page. */
-  gtk_box_pack_start (GTK_BOX (box), power_box, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (power_box), power_sep, FALSE, FALSE, 2);
-  power_tile = make_tile (power_box, "system-shutdown-symbolic", "Power");
+  /* Mini tile in the shared action grid. */
+  power_tile = make_mini_tile (box, "system-shutdown-symbolic", "Power", NULL);
   g_signal_connect (power_tile, "clicked",
                     G_CALLBACK (on_power_tile_clicked), qs);
 
   /* Sub-page with the session actions. */
   power_page = make_sub_page ("Power", &power_back);
-  action_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+  action_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_INNER_GAP);
   gtk_box_set_homogeneous (GTK_BOX (action_box), TRUE);
   gtk_box_pack_start (GTK_BOX (power_page), action_box, FALSE, FALSE, 0);
   make_power_button (action_box, "system-shutdown-symbolic",

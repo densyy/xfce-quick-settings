@@ -131,28 +131,8 @@ static gchar *
 gb_text (guint64 bytes,
          guint64 total)
 {
-  return g_strdup_printf ("%.1f / %.1f GB (%d%%)",
-                          bytes / 1073741824.0, total / 1073741824.0,
-                          total == 0 ? 0
-                          : (gint) (100 * bytes / total));
-}
-
-/* Label + progress bar row; returns the bar. */
-static GtkWidget *
-add_meter (GtkWidget   *grid,
-           gint         row,
-           const gchar *name)
-{
-  GtkWidget *label = gtk_label_new (name);
-  GtkWidget *bar = gtk_progress_bar_new ();
-
-  gtk_widget_set_halign (label, GTK_ALIGN_START);
-  gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
-  gtk_widget_set_hexpand (bar, TRUE);
-  gtk_progress_bar_set_show_text (GTK_PROGRESS_BAR (bar), TRUE);
-  gtk_grid_attach (GTK_GRID (grid), label, 0, row, 1, 1);
-  gtk_grid_attach (GTK_GRID (grid), bar, 1, row, 1, 1);
-  return bar;
+  return g_strdup_printf ("%.1f / %.1f GB",
+                          bytes / 1073741824.0, total / 1073741824.0);
 }
 
 /* /proc/mounts escapes space/tab/newline/backslash as octal. */
@@ -208,7 +188,7 @@ sysmon_refresh (QuickSettings *qs)
       text = gb_text (used_bytes, total_bytes);
       gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_ram_bar),
                                      (gdouble) used_bytes / (gdouble) total_bytes);
-      gtk_progress_bar_set_text (GTK_PROGRESS_BAR (qs->sysmon_ram_bar), text);
+      gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
       g_free (text);
     }
   cpu = read_cpu_percent (qs);
@@ -217,15 +197,15 @@ sysmon_refresh (QuickSettings *qs)
       text = g_strdup_printf ("%d%%", (gint) (cpu + 0.5));
       gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar),
                                      cpu / 100.0);
-      gtk_progress_bar_set_text (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar), text);
+      gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value), text);
       g_free (text);
     }
 
   /* Disks: rebuild the rows (partitions may come and go). */
   clear_list_box (qs->sysmon_disk_box);
   disk_grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (disk_grid), 12);
-  gtk_grid_set_column_spacing (GTK_GRID (disk_grid), 12);
+  gtk_grid_set_row_spacing (GTK_GRID (disk_grid), QS_INNER_GAP);
+  gtk_grid_set_column_spacing (GTK_GRID (disk_grid), QS_PAGE_PAD);
   gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), disk_grid, FALSE, FALSE, 0);
   if (g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
     {
@@ -242,7 +222,6 @@ sysmon_refresh (QuickSettings *qs)
           struct statvfs st;
           guint64 total;
           guint64 used;
-          GtkWidget *bar;
           gchar *device;
           gchar *target;
           const gchar *base;
@@ -275,13 +254,19 @@ sysmon_refresh (QuickSettings *qs)
           name = g_strdup (base);
           g_free (device);
           g_free (target);
-          bar = add_meter (disk_grid, row++, name);
+          {
+            GtkWidget *value = NULL;
+            GtkWidget *bar = NULL;
+
+            make_meter (disk_grid, row++, name, &value, &bar);
+            text = gb_text (used, total);
+            gtk_label_set_text (GTK_LABEL (value), text);
+            g_free (text);
+            gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
+                                           total == 0 ? 0.0
+                                           : (gdouble) used / (gdouble) total);
+          }
           g_free (name);
-          text = gb_text (used, total);
-          gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                         (gdouble) used / (gdouble) total);
-          gtk_progress_bar_set_text (GTK_PROGRESS_BAR (bar), text);
-          g_free (text);
           g_strfreev (parts);
         }
       g_strfreev (lines);
@@ -291,6 +276,7 @@ sysmon_refresh (QuickSettings *qs)
     {
       GtkWidget *empty = gtk_label_new ("No disks found");
 
+      ui_add_class (empty, "qs-status");
       gtk_widget_set_halign (empty, GTK_ALIGN_START);
       gtk_grid_attach (GTK_GRID (disk_grid), empty, 0, 0, 2, 1);
     }
@@ -357,39 +343,30 @@ on_sysmon_popup_hide (GtkWidget *widget,
 void
 sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *sys_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  GtkWidget *sys_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   GtkWidget *sys_tile;
   GtkWidget *page;
   GtkWidget *content;
-  GtkWidget *disks_header;
+  GtkWidget *disks_grid;
   GtkWidget *back;
-  gchar     *markup;
 
-  /* Full-width tile above the Notifications tile. */
-  gtk_box_pack_start (GTK_BOX (box), sys_box, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (sys_box), sys_sep, FALSE, FALSE, 2);
-  sys_tile = make_tile (sys_box, "computer-symbolic",
-                         "System");
+  /* Mini tile in the shared action grid. */
+  sys_tile = make_mini_tile (box, "computer-symbolic", "System", NULL);
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);
 
-  /* Sub-page: RAM + CPU meters, then one meter per partition. */
+  /* Sub-page: RAM + CPU meter cards, then one card per disk. */
   page = make_sub_page ("System", &back);
   content = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (content), 12);
-  gtk_grid_set_column_spacing (GTK_GRID (content), 12);
+  gtk_grid_set_row_spacing (GTK_GRID (content), QS_INNER_GAP);
+  gtk_grid_set_column_spacing (GTK_GRID (content), QS_PAGE_PAD);
   gtk_box_pack_start (GTK_BOX (page), content, FALSE, FALSE, 0);
-  qs->sysmon_ram_bar = add_meter (content, 0, "RAM");
-  qs->sysmon_cpu_bar = add_meter (content, 1, "CPU");
-  markup = g_strdup ("<b>Disks</b>");
-  disks_header = gtk_label_new (NULL);
-  gtk_label_set_markup (GTK_LABEL (disks_header), markup);
-  g_free (markup);
-  gtk_widget_set_halign (disks_header, GTK_ALIGN_START);
-  gtk_box_pack_start (GTK_BOX (page), disks_header, FALSE, FALSE, 0);
-  qs->sysmon_disk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  gtk_box_pack_start (GTK_BOX (page), qs->sysmon_disk_box, FALSE, FALSE, 0);
+  make_meter (content, 0, "Memory",
+              &qs->sysmon_ram_value, &qs->sysmon_ram_bar);
+  make_meter (content, 1, "Processor",
+              &qs->sysmon_cpu_value, &qs->sysmon_cpu_bar);
+  disks_grid = make_group (page, "Disks");
+  qs->sysmon_disk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
+  gtk_grid_attach (GTK_GRID (disks_grid), qs->sysmon_disk_box, 0, 0, 2, 1);
   gtk_stack_add_named (GTK_STACK (stack), page, "sysmon");
   g_signal_connect (back, "clicked",
                     G_CALLBACK (on_sysmon_back_clicked), qs);

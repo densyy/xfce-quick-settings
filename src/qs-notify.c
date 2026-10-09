@@ -110,59 +110,58 @@ static GtkWidget *
 make_notice_row (Notice *n)
 {
   GtkWidget *row = gtk_list_box_row_new ();
-  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
+  GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
+                                   QS_INNER_GAP);
   GtkWidget *title;
+  GtkWidget *time_label;
   GtkWidget *sub;
   gchar     *esc;
-  gchar     *markup;
   gchar     *time;
   gchar     *sub_text;
 
-  gtk_style_context_add_class (gtk_widget_get_style_context (row),
-                               "qs-card");
-  gtk_widget_set_margin_top (row, 4);
-  gtk_widget_set_margin_bottom (row, 4);
-  gtk_widget_set_margin_start (row, 8);
-  gtk_widget_set_margin_end (row, 8);
-  gtk_container_set_border_width (GTK_CONTAINER (vbox), 6);
+  ui_add_class (row, "qs-card");
+  gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_INNER_GAP);
 
+  /* Bold summary with the time pinned to the right. */
   esc = g_markup_escape_text (n->summary != NULL && *n->summary != '\0'
                               ? n->summary : n->app, -1);
-  markup = g_strdup_printf ("<b>%s</b>", *esc != '\0' ? esc : "Notification");
-  title = gtk_label_new (NULL);
-  gtk_label_set_markup (GTK_LABEL (title), markup);
-  g_free (markup);
+  title = gtk_label_new (*esc != '\0' ? esc : "Notification");
   g_free (esc);
-   gtk_widget_set_halign (title, GTK_ALIGN_START);
-   gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
-   gtk_box_pack_start (GTK_BOX (vbox), title, FALSE, FALSE, 0);
-
-   if (n->body != NULL && *n->body != '\0')
-     {
-       GtkWidget *body = gtk_label_new (NULL);
-
-       esc = g_markup_escape_text (n->body, -1);
-       markup = g_strdup_printf ("<small>%s</small>", esc);
-       gtk_label_set_markup (GTK_LABEL (body), markup);
-       g_free (markup);
-       g_free (esc);
-       gtk_widget_set_halign (body, GTK_ALIGN_START);
-       gtk_label_set_line_wrap (GTK_LABEL (body), TRUE);
-       gtk_label_set_lines (GTK_LABEL (body), 3);
-       gtk_label_set_ellipsize (GTK_LABEL (body), PANGO_ELLIPSIZE_END);
-       gtk_box_pack_start (GTK_BOX (vbox), body, FALSE, FALSE, 0);
-     }
-
-   time = notice_time (n->timestamp);
-  sub_text = g_strdup_printf ("%s · %s", n->app, time);
-  esc = g_markup_escape_text (sub_text, -1);
-  markup = g_strdup_printf ("<small>%s</small>", esc);
-  sub = gtk_label_new (NULL);
-  gtk_label_set_markup (GTK_LABEL (sub), markup);
-  g_free (markup);
-  g_free (esc);
-  g_free (sub_text);
+  ui_add_class (title, "qs-title");
+  gtk_widget_set_halign (title, GTK_ALIGN_START);
+  gtk_widget_set_hexpand (title, TRUE);
+  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+  time = notice_time (n->timestamp);
+  time_label = gtk_label_new (time);
+  ui_add_class (time_label, "qs-sub");
   g_free (time);
+  gtk_box_pack_start (GTK_BOX (header), title, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (header), time_label, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (vbox), header, FALSE, FALSE, 0);
+
+  if (n->body != NULL && *n->body != '\0')
+    {
+      GtkWidget *body = gtk_label_new (NULL);
+
+      esc = g_markup_escape_text (n->body, -1);
+      gtk_label_set_text (GTK_LABEL (body), esc);
+      g_free (esc);
+      gtk_widget_set_halign (body, GTK_ALIGN_START);
+      gtk_label_set_line_wrap (GTK_LABEL (body), TRUE);
+      gtk_label_set_lines (GTK_LABEL (body), 3);
+      gtk_label_set_ellipsize (GTK_LABEL (body), PANGO_ELLIPSIZE_END);
+      gtk_box_pack_start (GTK_BOX (vbox), body, FALSE, FALSE, 0);
+    }
+
+  sub_text = g_strdup (n->app != NULL ? n->app : "");
+  sub = gtk_label_new (sub_text);
+  g_free (sub_text);
+  ui_add_class (sub, "qs-sub");
   gtk_widget_set_halign (sub, GTK_ALIGN_START);
   gtk_box_pack_start (GTK_BOX (vbox), sub, FALSE, FALSE, 0);
 
@@ -175,6 +174,7 @@ notify_fill_list (QuickSettings *qs)
 {
   GList *notices = list_notices ();
   GList *l;
+  guint  count = 0;
 
   clear_list_box (qs->notify_list);
   if (notices == NULL)
@@ -185,12 +185,61 @@ notify_fill_list (QuickSettings *qs)
   else
     {
       for (l = notices; l != NULL; l = l->next)
-        gtk_list_box_insert (GTK_LIST_BOX (qs->notify_list),
-                             make_notice_row (l->data), -1);
+        {
+          gtk_list_box_insert (GTK_LIST_BOX (qs->notify_list),
+                               make_notice_row (l->data), -1);
+          count++;
+        }
       g_list_free_full (notices, notice_free);
     }
-  gtk_widget_set_sensitive (qs->notify_clear, notices != NULL);
+  if (count == 0)
+    gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
+  else
+    {
+      gchar *text = g_strdup_printf ("%u", count);
+
+      gtk_label_set_text (GTK_LABEL (qs->notify_sub), text);
+      g_free (text);
+    }
+  gtk_widget_set_sensitive (qs->notify_clear, count > 0);
   gtk_widget_show_all (qs->notify_list);
+}
+
+/* Lightweight count for the main-page tile (no row parsing). */
+void
+notify_update_tile (QuickSettings *qs)
+{
+  gchar *path = notify_db_path ();
+  gchar *quoted;
+  gchar *cmd;
+  gchar *output;
+  gint   count = -1;
+
+  if (command_exists ("sqlite3")
+      && g_file_test (path, G_FILE_TEST_EXISTS))
+    {
+      quoted = g_shell_quote (path);
+      cmd = g_strdup_printf ("sqlite3 %s \"SELECT COUNT(*) "
+                             "FROM notifications;\"", quoted);
+      g_free (quoted);
+      output = run_command (cmd);
+      g_free (cmd);
+      if (output != NULL)
+        {
+          count = atoi (g_strstrip (output));
+          g_free (output);
+        }
+    }
+  g_free (path);
+  if (count <= 0)
+    gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
+  else
+    {
+      gchar *text = g_strdup_printf ("%d", count);
+
+      gtk_label_set_text (GTK_LABEL (qs->notify_sub), text);
+      g_free (text);
+    }
 }
 
 static void
@@ -241,18 +290,15 @@ on_notify_back_clicked (GtkButton *button,
 void
 notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *notify_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
-  GtkWidget *notify_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   GtkWidget *notify_tile;
   GtkWidget *page;
   GtkWidget *scroll;
   GtkWidget *back;
 
-  /* Full-width tile above the Power tile. */
-  gtk_box_pack_start (GTK_BOX (box), notify_box, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (notify_box), notify_sep, FALSE, FALSE, 2);
-  notify_tile = make_tile (notify_box, "preferences-system-notifications-symbolic",
-                            "Notifications");
+  /* Mini tile in the shared action grid. */
+  notify_tile = make_mini_tile (box, "preferences-system-notifications-symbolic",
+                                "Notifications", &qs->notify_sub);
+  gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
   g_signal_connect (notify_tile, "clicked",
                     G_CALLBACK (on_notify_tile_clicked), qs);
 
@@ -265,9 +311,11 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   qs->notify_list = gtk_list_box_new ();
   gtk_list_box_set_selection_mode (GTK_LIST_BOX (qs->notify_list),
                                    GTK_SELECTION_NONE);
+  ui_add_class (qs->notify_list, "qs-list");
   gtk_container_add (GTK_CONTAINER (scroll), qs->notify_list);
   gtk_box_pack_start (GTK_BOX (page), scroll, TRUE, TRUE, 0);
   qs->notify_clear = gtk_button_new_with_label ("Clear");
+  ui_add_class (qs->notify_clear, "qs-btn");
   gtk_box_pack_start (GTK_BOX (page), qs->notify_clear, FALSE, FALSE, 0);
   g_signal_connect (qs->notify_clear, "clicked",
                     G_CALLBACK (on_notify_clear_clicked), qs);

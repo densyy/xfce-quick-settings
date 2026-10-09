@@ -218,28 +218,31 @@ power_refresh (QuickSettings *qs)
   gtk_image_set_from_icon_name (GTK_IMAGE (qs->bat_icon),
                                 battery_icon_for_level (percent, charging),
                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
+  {
+    gchar *value = g_strdup_printf ("%d%%", percent);
+
+    gtk_label_set_text (GTK_LABEL (qs->bat_label), value);
+    g_free (value);
+  }
   if (state != NULL && g_ascii_strcasecmp (state, "fully-charged") == 0)
-    label = g_strdup_printf ("%d%% · Fully charged", percent);
+    label = g_strdup ("Fully charged");
   else if (state != NULL && g_ascii_strcasecmp (state, "empty") == 0)
-    label = g_strdup_printf ("%d%% · Empty", percent);
+    label = g_strdup ("Empty");
   else if (charging)
-    label = g_strdup_printf ("%d%% · Charging", percent);
+    label = g_strdup ("Charging");
   else
-    label = g_strdup_printf ("%d%%", percent);
-  gtk_label_set_text (GTK_LABEL (qs->bat_label), label);
-  g_free (label);
+    label = g_strdup ("Discharging");
   if (time != NULL && *time != '\0')
     {
-      tip = g_strdup_printf ("%s: %s",
+      tip = g_strdup_printf ("%s · %s: %s", label,
                              charging ? "Time to full" : "Time to empty",
                              time);
-      gtk_widget_set_tooltip_text (qs->bat_label, tip);
-      g_free (tip);
+      g_free (label);
+      label = tip;
+      tip = NULL;
     }
-  else
-    {
-      gtk_widget_set_tooltip_text (qs->bat_label, NULL);
-    }
+  gtk_label_set_text (GTK_LABEL (qs->bat_status), label);
+  g_free (label);
   g_free (state);
   g_free (time);
 }
@@ -249,21 +252,40 @@ power_refresh (QuickSettings *qs)
 void
 power_build_section (GtkWidget *box, QuickSettings *qs)
 {
-  GtkWidget *bat_grid;
-  GtkWidget *bat_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+  GtkWidget *bat_header;
+  GtkWidget *bat_card;
+  GtkWidget *bat_hbox;
+  GtkWidget *bat_vbox;
 
-  qs->bat_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
+  bat_header = gtk_label_new ("Battery");
+  ui_add_class (bat_header, "qs-section");
+  gtk_widget_set_halign (bat_header, GTK_ALIGN_START);
+  gtk_box_pack_start (GTK_BOX (box), bat_header, FALSE, FALSE, 0);
+
+  /* Highlight card: big percentage + status line. Hidden when
+   * power_refresh finds no battery. */
+  qs->bat_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_box_pack_start (GTK_BOX (box), qs->bat_box, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (qs->bat_box), bat_sep, FALSE, FALSE, 2);
-  bat_grid = make_group (qs->bat_box, "Battery");
+  bat_card = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  ui_add_class (bat_card, "qs-card");
+  gtk_box_pack_start (GTK_BOX (qs->bat_box), bat_card, FALSE, FALSE, 0);
+  bat_hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_PAGE_PAD);
+  gtk_container_set_border_width (GTK_CONTAINER (bat_hbox), QS_INNER_GAP + 2);
   qs->bat_icon = gtk_image_new_from_icon_name ("battery-missing-symbolic",
                                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
-  gtk_image_set_pixel_size (GTK_IMAGE (qs->bat_icon), QS_MAIN_ICON_PX);
+  gtk_image_set_pixel_size (GTK_IMAGE (qs->bat_icon), 32);
   gtk_widget_set_halign (qs->bat_icon, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (qs->bat_icon, GTK_ALIGN_CENTER);
-  gtk_grid_attach (GTK_GRID (bat_grid), qs->bat_icon, 0, 0, 1, 1);
+  bat_vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   qs->bat_label = gtk_label_new ("—");
+  ui_add_class (qs->bat_label, "qs-value");
   gtk_widget_set_halign (qs->bat_label, GTK_ALIGN_START);
-  gtk_widget_set_hexpand (qs->bat_label, TRUE);
-  gtk_grid_attach (GTK_GRID (bat_grid), qs->bat_label, 1, 0, 1, 1);
+  qs->bat_status = gtk_label_new ("");
+  ui_add_class (qs->bat_status, "qs-sub");
+  gtk_widget_set_halign (qs->bat_status, GTK_ALIGN_START);
+  gtk_box_pack_start (GTK_BOX (bat_vbox), qs->bat_label, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (bat_vbox), qs->bat_status, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (bat_hbox), qs->bat_icon, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (bat_hbox), bat_vbox, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (bat_card), bat_hbox, FALSE, FALSE, 0);
 }

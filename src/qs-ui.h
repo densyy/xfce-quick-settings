@@ -3,10 +3,23 @@
 
 #include "qs-core.h"
 
-/* Fixed pixel size for main-page icons (tiles, sliders, battery). */
+/* ---- visual tokens (single source of truth) ----
+ * Radius 10 everywhere; spacing 12 page/section, 8 inner, 4 tight;
+ * icons 24 main actions, 20 list rows, 16 inline meta;
+ * type: section small bold dim, title larger bold, sub/status small dim. */
 #define QS_MAIN_ICON_PX 24
+#define QS_ROW_ICON_PX 20
+#define QS_META_ICON_PX 16
+#define QS_RADIUS_PX 10
+#define QS_PAGE_PAD 12
+#define QS_SECTION_GAP 12
+#define QS_INNER_GAP 8
+#define QS_TIGHT_GAP 4
 
-/* Loads the tile CSS once. */
+/* Adds a style class to a widget. */
+void ui_add_class (GtkWidget   *widget,
+                   const gchar *cls);
+/* Loads the shared stylesheet once. */
 void ui_load_css (void);
 /* Titled group inside box. Returns the content grid for attaching rows. */
 GtkWidget *make_group (GtkWidget   *box,
@@ -25,6 +38,24 @@ void set_tile_active (GtkWidget *tile,
 GtkWidget *make_tile (GtkWidget   *box,
                       const gchar *icon_name,
                       const gchar *label);
+/* Navigation tile: icon + bold title + dim subtitle (sub_out may be NULL
+ * to skip the subtitle, or filled when the caller owns the label). */
+GtkWidget *make_nav_tile (GtkWidget    *box,
+                          const gchar  *icon_name,
+                          const gchar  *title,
+                          GtkWidget   **sub_out);
+/* Compact vertical tile (icon above label) for the action grid. */
+GtkWidget *make_mini_tile (GtkWidget    *box,
+                           const gchar  *icon_name,
+                           const gchar  *title,
+                           GtkWidget   **sub_out);
+/* Meter card: name + value header with a thin bar below. Fills bar_out
+ * and value_out (both may be NULL). */
+void make_meter (GtkWidget    *grid,
+                 gint          row,
+                 const gchar  *name,
+                 GtkWidget   **value_out,
+                 GtkWidget   **bar_out);
 /* Generic sub-page: header (back + title + switch), scan button,
  * scrollable list, status line. */
 GtkWidget *build_device_page (const gchar *title,

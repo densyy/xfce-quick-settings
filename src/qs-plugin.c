@@ -58,7 +58,7 @@ position_popup (QuickSettings *qs)
   gtk_window_get_size (GTK_WINDOW (qs->popup), &popup_width, &popup_height);
   if (popup_width <= 1 || popup_height <= 1)
     {
-      popup_width = 300;
+      popup_width = 320;
       popup_height = 200;
     }
 
@@ -97,6 +97,7 @@ on_button_clicked (GtkButton *button,
   audio_refresh_devices (qs);
   net_update_tiles (qs);
   net_refresh_bt_tile (qs); /* async: corrects the BT tile once probed */
+  notify_update_tile (qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
   gtk_widget_show_all (qs->popup);
   power_refresh (qs); /* after show_all: may hide the battery section */
@@ -138,8 +139,6 @@ construct_quick_settings (XfcePanelPlugin *plugin)
 {
   QuickSettings *qs;
   GtkWidget     *box;
-  GtkWidget     *top_grid;
-  GtkWidget     *separator;
 
   qs = g_new0 (QuickSettings, 1);
   qs->refcount = 1;
@@ -163,7 +162,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_window_set_skip_pager_hint (GTK_WINDOW (qs->popup), TRUE);
   gtk_window_set_keep_above (GTK_WINDOW (qs->popup), TRUE);
   gtk_window_set_type_hint (GTK_WINDOW (qs->popup), GDK_WINDOW_TYPE_HINT_POPUP_MENU);
-  gtk_widget_set_size_request (qs->popup, 300, -1);
+  gtk_widget_set_size_request (qs->popup, 320, -1);
 
   qs->stack = gtk_stack_new ();
   gtk_stack_set_transition_type (GTK_STACK (qs->stack),
@@ -174,29 +173,24 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_container_set_border_width (GTK_CONTAINER (box), 12);
   gtk_stack_add_named (GTK_STACK (qs->stack), box, "main");
 
-  /* Each section is built by its own module. Sliders share one
-   * headerless grid: audio rows 0-1, display rows 2-3. */
-  top_grid = make_plain_grid (box);
-  audio_build_section (top_grid, qs->stack, qs);
-
-  separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-  gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);
-
-  display_build_section (top_grid, qs->stack, qs);
-
-  separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-  gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);
-
+  /* Main page rhythm comes from section headers + spacing only. */
+  audio_build_section (box, qs->stack, qs);
+  display_build_section (box, qs->stack, qs);
   net_build_section (box, qs->stack, qs);
 
-  /* Battery group carries its own separator (hidden with the section). */
+  /* Battery card carries its own box (hidden when no battery exists). */
   power_build_section (box, qs);
 
-  notify_build_section (box, qs->stack, qs);
+  /* System / Notifications / Power share one homogeneous action grid. */
+  {
+    GtkWidget *action_grid = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
 
-  sysmon_build_section (box, qs->stack, qs);
-
-  session_build_section (box, qs->stack, qs);
+    gtk_box_set_homogeneous (GTK_BOX (action_grid), TRUE);
+    gtk_box_pack_start (GTK_BOX (box), action_grid, FALSE, FALSE, 0);
+    sysmon_build_section (action_grid, qs->stack, qs);
+    notify_build_section (action_grid, qs->stack, qs);
+    session_build_section (action_grid, qs->stack, qs);
+  }
 
   g_signal_connect (qs->button, "clicked", G_CALLBACK (on_button_clicked), qs);
   g_signal_connect (plugin, "size-changed", G_CALLBACK (on_size_changed), qs);

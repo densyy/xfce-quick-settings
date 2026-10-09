@@ -257,11 +257,25 @@ list_bt_devices (void)
 }
 /* --- Wi-Fi page --- */
 
+/* Card row: 20px icon + bold name + dim meta on the right. */
+static void
+style_card_row (GtkWidget *row,
+                GtkWidget *content)
+{
+  ui_add_class (row, "qs-card");
+  gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (content), QS_INNER_GAP);
+}
+
 static void
 wifi_fill_list (QuickSettings *qs,
                 GList         *nets)
 {
   GList *l;
+  const gchar *active_ssid = NULL;
 
   clear_list_box (qs->wifi_list);
   if (nets == NULL)
@@ -275,23 +289,39 @@ wifi_fill_list (QuickSettings *qs,
     {
       WifiNet   *net = l->data;
       GtkWidget *row = gtk_list_box_row_new ();
-      GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
+                                     QS_INNER_GAP);
       GtkWidget *icon = gtk_image_new_from_icon_name (net->active
                          ? "network-wireless-connected-symbolic"
                          : wifi_signal_icon (net->signal),
                          GTK_ICON_SIZE_LARGE_TOOLBAR);
       GtkWidget *name = gtk_label_new (net->ssid);
+      GtkWidget *meta;
 
+      if (net->active)
+        active_ssid = net->ssid;
+      gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
+      ui_add_class (name, "qs-title");
       gtk_widget_set_halign (name, GTK_ALIGN_START);
       gtk_widget_set_hexpand (name, TRUE);
       gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
+      meta = gtk_label_new (NULL);
+      {
+        gchar *text = g_strdup_printf ("%d%%", CLAMP (net->signal, 0, 100));
+
+        gtk_label_set_text (GTK_LABEL (meta), text);
+        g_free (text);
+      }
+      ui_add_class (meta, "qs-sub");
       gtk_box_pack_start (GTK_BOX (hbox), icon, FALSE, FALSE, 0);
       gtk_box_pack_start (GTK_BOX (hbox), name, TRUE, TRUE, 0);
+      gtk_box_pack_start (GTK_BOX (hbox), meta, FALSE, FALSE, 0);
       if (net->active)
         {
           GtkWidget *check = gtk_image_new_from_icon_name ("object-select-symbolic",
                                                            GTK_ICON_SIZE_MENU);
 
+          gtk_image_set_pixel_size (GTK_IMAGE (check), QS_META_ICON_PX);
           gtk_box_pack_start (GTK_BOX (hbox), check, FALSE, FALSE, 0);
         }
       else if (net->secured)
@@ -299,8 +329,10 @@ wifi_fill_list (QuickSettings *qs,
           GtkWidget *lock = gtk_image_new_from_icon_name ("system-lock-screen-symbolic",
                                                           GTK_ICON_SIZE_MENU);
 
+          gtk_image_set_pixel_size (GTK_IMAGE (lock), QS_META_ICON_PX);
           gtk_box_pack_start (GTK_BOX (hbox), lock, FALSE, FALSE, 0);
         }
+      style_card_row (row, hbox);
       gtk_container_add (GTK_CONTAINER (row), hbox);
       g_object_set_data_full (G_OBJECT (row), "qs-ssid",
                               g_strdup (net->ssid), g_free);
@@ -308,6 +340,10 @@ wifi_fill_list (QuickSettings *qs,
                          GINT_TO_POINTER (net->secured));
       gtk_container_add (GTK_CONTAINER (qs->wifi_list), row);
     }
+  if (active_ssid != NULL)
+    gtk_label_set_text (GTK_LABEL (qs->wifi_sub), active_ssid);
+  else if (nets != NULL)
+    gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "Not connected");
   gtk_widget_show_all (qs->wifi_list);
 }
 
@@ -557,9 +593,10 @@ show_wifi_page (QuickSettings *qs)
 static void
 bt_fill_list (QuickSettings *qs,
               GList         *devs,
-              const gchar   *empty_text)
+               const gchar   *empty_text)
 {
   GList *l;
+  const gchar *connected_name = NULL;
 
   clear_list_box (qs->bt_list);
   if (devs == NULL)
@@ -569,7 +606,8 @@ bt_fill_list (QuickSettings *qs,
     {
       BtDevice  *dev = l->data;
       GtkWidget *row = gtk_list_box_row_new ();
-      GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
+                                     QS_INNER_GAP);
       GtkWidget *icon = gtk_image_new_from_icon_name (dev->connected
                          ? "bluetooth-active-symbolic"
                          : "bluetooth-symbolic",
@@ -577,14 +615,20 @@ bt_fill_list (QuickSettings *qs,
       GtkWidget *name = gtk_label_new (dev->name);
       GtkWidget *state;
 
+      if (dev->connected)
+        connected_name = dev->name;
+      gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
+      ui_add_class (name, "qs-title");
       gtk_widget_set_halign (name, GTK_ALIGN_START);
       gtk_widget_set_hexpand (name, TRUE);
       gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
       state = gtk_label_new (dev->connected ? "Connected"
                              : dev->paired ? "Paired" : "");
+      ui_add_class (state, "qs-sub");
       gtk_box_pack_start (GTK_BOX (hbox), icon, FALSE, FALSE, 0);
       gtk_box_pack_start (GTK_BOX (hbox), name, TRUE, TRUE, 0);
       gtk_box_pack_start (GTK_BOX (hbox), state, FALSE, FALSE, 0);
+      style_card_row (row, hbox);
       gtk_container_add (GTK_CONTAINER (row), hbox);
       g_object_set_data_full (G_OBJECT (row), "qs-mac",
                               g_strdup (dev->mac), g_free);
@@ -592,6 +636,10 @@ bt_fill_list (QuickSettings *qs,
                               g_strdup (dev->name), g_free);
       gtk_container_add (GTK_CONTAINER (qs->bt_list), row);
     }
+  if (connected_name != NULL)
+    gtk_label_set_text (GTK_LABEL (qs->bt_sub), connected_name);
+  else if (devs != NULL)
+    gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
   gtk_widget_show_all (qs->bt_list);
 }
 
@@ -651,12 +699,14 @@ bt_load_idle (gpointer data)
                           ? "No Bluetooth adapter found."
                           : "Install bluez-utils.");
       gtk_widget_set_sensitive (qs->bt_switch, FALSE);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), "No adapter");
       bt_fill_list (qs, NULL, "No adapter.");
     }
   else if (!r->powered)
     {
       gtk_label_set_text (GTK_LABEL (qs->bt_status), "Bluetooth is off.");
       gtk_widget_set_sensitive (qs->bt_switch, TRUE);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Off");
       bt_fill_list (qs, NULL, "Turn Bluetooth on to see devices.");
     }
   else
@@ -887,6 +937,9 @@ net_update_tiles (QuickSettings *qs)
   qs->wifi_on = wifi_available () ? wifi_enabled () : FALSE;
   set_tile_active (qs->wifi_tile, qs->wifi_on);
   gtk_widget_set_sensitive (qs->wifi_tile, wifi_available ());
+  gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
+                      !wifi_available () ? "Unavailable"
+                      : qs->wifi_on ? "On" : "Off");
   /* Bluetooth state is live-probed async on popup open (see below):
    * a sync check here may block without the daemon. Show the last
    * known state now; the probe corrects it moments later. */
@@ -924,6 +977,9 @@ bt_tile_probe_idle (gpointer data)
       gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), qs->bt_on);
       qs->updating = FALSE;
       set_tile_active (qs->bt_tile, qs->bt_on);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub),
+                          qs->bt_controller == NULL ? "No adapter"
+                          : qs->bt_on ? "On" : "Off");
     }
   g_free (p->controller);
   g_free (p);
@@ -992,7 +1048,8 @@ void
 net_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *conn_grid = make_group (box, "Connection");
-  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
+                                     QS_INNER_GAP);
   GtkWidget *wifi_page;
   GtkWidget *bt_page;
   GtkWidget *wifi_back;
@@ -1000,11 +1057,14 @@ net_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 
   gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
   gtk_grid_attach (GTK_GRID (conn_grid), tile_box, 0, 0, 2, 1);
-  qs->wifi_tile = make_tile (tile_box, "network-wireless-symbolic", "Wi-Fi");
+  qs->wifi_tile = make_nav_tile (tile_box, "network-wireless-symbolic",
+                                 "Wi-Fi", &qs->wifi_sub);
+  gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "…");
   g_signal_connect (qs->wifi_tile, "clicked",
                     G_CALLBACK (on_wifi_tile_clicked), qs);
-  qs->bt_tile = make_tile (tile_box, "bluetooth-active-symbolic",
-                            "Bluetooth");
+  qs->bt_tile = make_nav_tile (tile_box, "bluetooth-active-symbolic",
+                                "Bluetooth", &qs->bt_sub);
+  gtk_label_set_text (GTK_LABEL (qs->bt_sub), "…");
   g_signal_connect (qs->bt_tile, "clicked",
                     G_CALLBACK (on_bt_tile_clicked), qs);
 

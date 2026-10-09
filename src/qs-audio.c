@@ -502,11 +502,13 @@ make_device_row (GtkWidget   *grid,
   GtkWidget *combo;
 
   icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
   gtk_widget_set_halign (icon, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
   gtk_grid_attach (GTK_GRID (grid), icon, 0, row, 1, 1);
 
   combo = gtk_combo_box_text_new ();
+  ui_add_class (combo, "qs-combo");
   gtk_widget_set_hexpand (combo, TRUE);
   gtk_widget_set_tooltip_text (combo, tooltip);
   gtk_grid_attach (GTK_GRID (grid), combo, 1, row, 1, 1);
@@ -550,6 +552,7 @@ audio_refresh_devices (QuickSettings *qs)
 {
   GList *sinks;
   GList *sources;
+  GList *l;
 
   qs->updating = TRUE;
 
@@ -564,12 +567,24 @@ audio_refresh_devices (QuickSettings *qs)
     {
       fill_device_combo (qs->sink_combo, NULL, "Install pulseaudio-utils");
       fill_device_combo (qs->source_combo, NULL, "Install pulseaudio-utils");
+      gtk_label_set_text (GTK_LABEL (qs->audio_sub), "No audio backend");
       qs->updating = FALSE;
       return;
     }
 
   sinks = list_sinks (qs->audio_backend);
   fill_device_combo (qs->sink_combo, sinks, "No output devices");
+  gtk_label_set_text (GTK_LABEL (qs->audio_sub), "No output devices");
+  for (l = sinks; l != NULL; l = l->next)
+    {
+      AudioDev *dev = l->data;
+
+      if (dev->is_default)
+        {
+          gtk_label_set_text (GTK_LABEL (qs->audio_sub), dev->label);
+          break;
+        }
+    }
   g_list_free_full (sinks, audio_dev_free);
 
   sources = list_sources (qs->audio_backend);
@@ -651,35 +666,33 @@ on_audio_back_clicked (GtkButton *button,
 }
 
 void
-audio_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
+audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+  GtkWidget *sound_grid = make_group (box, "Sound");
   GtkWidget *audio_tile;
   GtkWidget *audio_page;
-  GtkWidget *audio_grid;
+  GtkWidget *out_grid;
+  GtkWidget *in_grid;
   GtkWidget *audio_back;
 
-  /* Slider on the shared top grid; selectors live on the sub-page. */
-  make_slider_row (grid, 0, 150, "audio-volume-high-symbolic", "Volume",
+  /* Slider on the main page; selectors live on the sub-page. */
+  make_slider_row (sound_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
   /* Tick mark showing where 100% ends and overamplification begins. */
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
-  gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
-  gtk_grid_attach (GTK_GRID (grid), tile_box, 0, 1, 2, 1);
-  audio_tile = make_tile (tile_box, "audio-speakers-symbolic",
-                           "Audio devices");
+  audio_tile = make_nav_tile (box, "audio-speakers-symbolic",
+                              "Audio devices", &qs->audio_sub);
+  gtk_label_set_text (GTK_LABEL (qs->audio_sub), "…");
   g_signal_connect (audio_tile, "clicked",
                     G_CALLBACK (on_audio_tile_clicked), qs);
 
   /* Sub-page with the output/input selectors. */
   audio_page = make_sub_page ("Audio devices", &audio_back);
-  audio_grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (audio_grid), 12);
-  gtk_grid_set_column_spacing (GTK_GRID (audio_grid), 12);
-  gtk_box_pack_start (GTK_BOX (audio_page), audio_grid, FALSE, FALSE, 0);
-  qs->sink_combo = make_device_row (audio_grid, 0, "audio-speakers-symbolic",
+  out_grid = make_group (audio_page, "Output");
+  qs->sink_combo = make_device_row (out_grid, 0, "audio-speakers-symbolic",
                                     "Audio output device");
-  qs->source_combo = make_device_row (audio_grid, 1,
+  in_grid = make_group (audio_page, "Input");
+  qs->source_combo = make_device_row (in_grid, 0,
                                       "audio-input-microphone-symbolic",
                                       "Audio input device");
   gtk_stack_add_named (GTK_STACK (stack), audio_page, "audio");
