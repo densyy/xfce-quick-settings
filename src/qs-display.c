@@ -346,7 +346,7 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                                        "Night", "4500K", qs);
   qs->night_dawn = make_night_button (preset_box,
                                       "weather-few-clouds-night-symbolic",
-                                      "Madrugada", "3500K", qs);
+                                      "Dawn", "3500K", qs);
   gtk_widget_set_sensitive (preset_box, night_available ());
   gtk_stack_add_named (GTK_STACK (stack), night_page, "night");
   g_signal_connect (night_back, "clicked",
