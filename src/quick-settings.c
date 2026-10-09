@@ -37,6 +37,9 @@ typedef struct
   GtkWidget       *night_day;
   GtkWidget       *night_aft;
   GtkWidget       *night_night;
+  GtkWidget       *bat_box;
+  GtkWidget       *bat_icon;
+  GtkWidget       *bat_label;
   gboolean         wifi_on;  gboolean         bt_on; /* cached: live check may block without daemon */
   gchar           *bt_controller; /* owned MAC or NULL */
   gboolean         scanning_wifi;
@@ -1280,6 +1283,248 @@ fill_device_combo (GtkWidget *combo,
     }
 }
 
+/* ---------------- battery backend (upower > sysfs) ---------------- */
+
+/* First "upower -e" line mentioning a battery, or NULL (caller frees). */
+static gchar *
+upower_battery_path (void)
+{
+  gchar  *output = run_command ("upower -e");
+  gchar **lines;
+  gchar  *path = NULL;
+  gint    i;
+
+  if (output == NULL)
+    return NULL;
+  lines = g_strsplit (output, "\n", -1);
+  for (i = 0; lines[i] != NULL; i++)
+    {
+      if (strstr (lines[i], "BAT") != NULL
+          || strstr (lines[i], "battery") != NULL)
+        {
+          path = g_strdup (g_strstrip (lines[i]));
+          break;
+        }
+    }
+  g_strfreev (lines);
+  g_free (output);
+  return path;
+}
+
+static gboolean
+get_battery_upower (gint   *percent,
+                    gchar **state_out,
+                    gchar **time_out)
+{
+  gchar *path = upower_battery_path ();
+  gchar *quoted;
+  gchar *cmd;
+  gchar *output;
+  gchar **lines;
+  gchar  *state = NULL;
+  gchar  *perc = NULL;
+  gchar  *to_empty = NULL;
+  gchar  *to_full = NULL;
+  gint    i;
+
+  if (path == NULL)
+    return FALSE;
+  quoted = g_shell_quote (path);
+  cmd = g_strdup_printf ("upower -i %s", quoted);
+  g_free (quoted);
+  g_free (path);
+  output = run_command (cmd);
+  g_free (cmd);
+  if (output == NULL)
+    return FALSE;
+  lines = g_strsplit (output, "\n", -1);
+  for (i = 0; lines[i] != NULL; i++)
+    {
+      const gchar *line = g_strstrip (lines[i]);
+
+      if (g_str_has_prefix (line, "state:"))
+        {
+          g_free (state);
+          state = g_strdup (g_strstrip ((gchar *) line + strlen ("state:")));
+        }
+      else if (g_str_has_prefix (line, "percentage:"))
+        {
+          g_free (perc);
+          perc = g_strdup (g_strstrip ((gchar *) line
+                                       + strlen ("percentage:")));
+        }
+      else if (g_str_has_prefix (line, "time to empty:"))
+        {
+          g_free (to_empty);
+          to_empty = g_strdup (g_strstrip ((gchar *) line
+                                           + strlen ("time to empty:")));
+        }
+      else if (g_str_has_prefix (line, "time to full:"))
+        {
+          g_free (to_full);
+          to_full = g_strdup (g_strstrip ((gchar *) line
+                                          + strlen ("time to full:")));
+        }
+    }
+  g_strfreev (lines);
+  g_free (output);
+  *percent = parse_first_percent (perc);
+  g_free (perc);
+  if (*percent < 0)
+    {
+      g_free (state);
+      g_free (to_empty);
+      g_free (to_full);
+      return FALSE;
+    }
+  *state_out = state;
+  /* Time remaining depends on the direction. */
+  if (state != NULL && g_ascii_strcasecmp (state, "charging") == 0)
+    {
+      *time_out = to_full;
+      g_free (to_empty);
+    }
+  else
+    {
+      *time_out = to_empty;
+      g_free (to_full);
+    }
+  return TRUE;
+}
+
+/* Fallback without UPower: first power_supply entry with type==Battery. */
+static gboolean
+get_battery_sysfs (gint   *percent,
+                   gchar **state_out,
+                   gchar **time_out)
+{
+  GDir        *dir = g_dir_open ("/sys/class/power_supply", 0, NULL);
+  const gchar *entry;
+  gboolean     found = FALSE;
+
+  *time_out = NULL;
+  if (dir == NULL)
+    return FALSE;
+  while (!found && (entry = g_dir_read_name (dir)) != NULL)
+    {
+      gchar *type_path = g_build_filename ("/sys/class/power_supply", entry,
+                                           "type", NULL);
+      gchar *type = NULL;
+
+      if (g_file_get_contents (type_path, &type, NULL, NULL))
+        {
+          if (g_strcmp0 (g_strstrip (type), "Battery") == 0)
+            {
+              gchar *cap_path = g_build_filename ("/sys/class/power_supply",
+                                                  entry, "capacity", NULL);
+              gchar *st_path = g_build_filename ("/sys/class/power_supply",
+                                                 entry, "status", NULL);
+              gchar *cap = NULL;
+
+              if (g_file_get_contents (cap_path, &cap, NULL, NULL))
+                {
+                  *percent = atoi (cap);
+                  g_free (cap);
+                  found = (*percent >= 0);
+                }
+              if (found
+                  && g_file_get_contents (st_path, state_out, NULL, NULL))
+                g_strstrip (*state_out);
+              g_free (cap_path);
+              g_free (st_path);
+            }
+          g_free (type);
+        }
+      g_free (type_path);
+    }
+  g_dir_close (dir);
+  return found;
+}
+
+static const gchar *
+battery_icon_for_level (gint     percent,
+                        gboolean charging)
+{
+  if (percent >= 100)
+    return "battery-full-charged-symbolic";
+  if (charging)
+    {
+      if (percent <= 5)
+        return "battery-empty-charging-symbolic";
+      if (percent <= 20)
+        return "battery-caution-charging-symbolic";
+      if (percent <= 40)
+        return "battery-low-charging-symbolic";
+      if (percent <= 80)
+        return "battery-good-charging-symbolic";
+      return "battery-full-charging-symbolic";
+    }
+  if (percent <= 5)
+    return "battery-empty-symbolic";
+  if (percent <= 20)
+    return "battery-caution-symbolic";
+  if (percent <= 40)
+    return "battery-low-symbolic";
+  if (percent <= 80)
+    return "battery-good-symbolic";
+  return "battery-full-symbolic";
+}
+
+/* Refresh icon + label; hides the whole section when no battery exists. */
+static void
+refresh_battery (QuickSettings *qs)
+{
+  gint      percent = -1;
+  gchar    *state = NULL;
+  gchar    *time = NULL;
+  gboolean  ok;
+  gboolean  charging;
+  gchar    *label;
+  gchar    *tip;
+
+  if (command_exists ("upower"))
+    ok = get_battery_upower (&percent, &state, &time);
+  else
+    ok = get_battery_sysfs (&percent, &state, &time);
+  if (!ok || percent < 0)
+    {
+      gtk_widget_hide (qs->bat_box);
+      g_free (state);
+      g_free (time);
+      return;
+    }
+  percent = CLAMP (percent, 0, 100);
+  charging = (state != NULL && g_ascii_strcasecmp (state, "charging") == 0);
+  gtk_widget_show_all (qs->bat_box);
+  gtk_image_set_from_icon_name (GTK_IMAGE (qs->bat_icon),
+                                battery_icon_for_level (percent, charging),
+                                GTK_ICON_SIZE_LARGE_TOOLBAR);
+  if (state != NULL && g_ascii_strcasecmp (state, "fully-charged") == 0)
+    label = g_strdup_printf ("%d%% · Fully charged", percent);
+  else if (state != NULL && g_ascii_strcasecmp (state, "empty") == 0)
+    label = g_strdup_printf ("%d%% · Empty", percent);
+  else if (charging)
+    label = g_strdup_printf ("%d%% · Charging", percent);
+  else
+    label = g_strdup_printf ("%d%%", percent);
+  gtk_label_set_text (GTK_LABEL (qs->bat_label), label);
+  g_free (label);
+  if (time != NULL && *time != '\0')
+    {
+      tip = g_strdup_printf ("%s: %s",
+                             charging ? "Time to full" : "Time to empty",
+                             time);
+      gtk_widget_set_tooltip_text (qs->bat_label, tip);
+      g_free (tip);
+    }
+  else
+    {
+      gtk_widget_set_tooltip_text (qs->bat_label, NULL);
+    }
+  g_free (state);
+  g_free (time);
+}
+
 /* ---------------- connection pages ---------------- */
 
 static void
@@ -2271,6 +2516,7 @@ on_button_clicked (GtkButton *button,
   update_tiles (qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
   gtk_widget_show_all (qs->popup);
+  refresh_battery (qs); /* after show_all: may hide the battery section */
   while (gtk_events_pending ())
     gtk_main_iteration ();
   position_popup (qs);
@@ -2506,6 +2752,26 @@ construct_quick_settings (XfcePanelPlugin *plugin)
                                &qs->bt_list, &qs->bt_status, &bt_back);
   gtk_stack_add_named (GTK_STACK (qs->stack), bt_page, "bt");
 
+  /* Battery group (hidden when no battery is present). */
+  {
+    GtkWidget *bat_grid;
+    GtkWidget *bat_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+
+    qs->bat_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+    gtk_box_pack_start (GTK_BOX (box), qs->bat_box, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (qs->bat_box), bat_sep, FALSE, FALSE, 2);
+    bat_grid = make_group (qs->bat_box, "Battery");
+    qs->bat_icon = gtk_image_new_from_icon_name ("battery-missing-symbolic",
+                                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
+    gtk_widget_set_halign (qs->bat_icon, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign (qs->bat_icon, GTK_ALIGN_CENTER);
+    gtk_grid_attach (GTK_GRID (bat_grid), qs->bat_icon, 0, 0, 1, 1);
+    qs->bat_label = gtk_label_new ("—");
+    gtk_widget_set_halign (qs->bat_label, GTK_ALIGN_START);
+    gtk_widget_set_hexpand (qs->bat_label, TRUE);
+    gtk_grid_attach (GTK_GRID (bat_grid), qs->bat_label, 1, 0, 1, 1);
+  }
+
   g_signal_connect (qs->vol_scale, "value-changed",
                     G_CALLBACK (on_volume_changed), qs);
   g_signal_connect (qs->bright_scale, "value-changed",
@@ -2538,6 +2804,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   refresh_slider_values (qs);
   refresh_audio_devices (qs);
   update_tiles (qs);
+  refresh_battery (qs);
 
   gtk_widget_show_all (GTK_WIDGET (plugin));
 }
