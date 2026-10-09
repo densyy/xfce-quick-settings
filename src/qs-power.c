@@ -258,6 +258,7 @@ power_build_section (GtkWidget *box, QuickSettings *qs)
   bat_grid = make_group (qs->bat_box, "Battery");
   qs->bat_icon = gtk_image_new_from_icon_name ("battery-missing-symbolic",
                                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_image_set_pixel_size (GTK_IMAGE (qs->bat_icon), QS_MAIN_ICON_PX);
   gtk_widget_set_halign (qs->bat_icon, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (qs->bat_icon, GTK_ALIGN_CENTER);
   gtk_grid_attach (GTK_GRID (bat_grid), qs->bat_icon, 0, 0, 1, 1);

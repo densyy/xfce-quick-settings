@@ -3,6 +3,9 @@
 
 #include "qs-core.h"
 
+/* Fixed pixel size for main-page icons (tiles, sliders, battery). */
+#define QS_MAIN_ICON_PX 24
+
 /* Loads the tile CSS once. */
 void ui_load_css (void);
 /* Titled group inside box. Returns the content grid for attaching rows. */

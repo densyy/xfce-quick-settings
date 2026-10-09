@@ -52,6 +52,7 @@ make_slider_row (GtkWidget    *grid,
   GtkWidget *scale;
 
   icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_MAIN_ICON_PX);
   gtk_widget_set_halign (icon, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
   gtk_grid_attach (GTK_GRID (grid), icon, 0, row, 1, 1);
@@ -97,6 +98,7 @@ make_tile (GtkWidget   *box,
   hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_container_set_border_width (GTK_CONTAINER (hbox), 4);
   image = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_image_set_pixel_size (GTK_IMAGE (image), QS_MAIN_ICON_PX);
   text = gtk_label_new (label);
   gtk_box_pack_start (GTK_BOX (hbox), image, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (hbox), text, FALSE, FALSE, 0);
