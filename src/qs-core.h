@@ -35,6 +35,7 @@ typedef struct
   GtkWidget       *bat_box;
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;
+  GtkWidget       *notify_list;
   gboolean         wifi_on;  gboolean         bt_on; /* cached: live check may block without daemon */
   gchar           *bt_controller; /* owned MAC or NULL */
   gboolean         scanning_wifi;
