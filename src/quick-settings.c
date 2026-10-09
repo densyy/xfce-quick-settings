@@ -790,6 +790,31 @@ set_default_source (QuickSettings *qs,
 
 /* ---------------- UI ---------------- */
 
+/* Creates a titled group (header label + content grid) inside a vertical
+ * box. Returns the content grid for attaching rows. */
+static GtkWidget *
+make_group (GtkWidget   *box,
+            const gchar *title)
+{
+  GtkWidget *header;
+  GtkWidget *grid;
+  gchar     *markup;
+
+  markup = g_strdup_printf ("<b>%s</b>", title);
+  header = gtk_label_new (NULL);
+  gtk_label_set_markup (GTK_LABEL (header), markup);
+  gtk_widget_set_halign (header, GTK_ALIGN_START);
+  gtk_box_pack_start (GTK_BOX (box), header, FALSE, FALSE, 0);
+  g_free (markup);
+
+  grid = gtk_grid_new ();
+  gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
+  gtk_grid_set_column_spacing (GTK_GRID (grid), 10);
+  gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
+
+  return grid;
+}
+
 static GtkWidget *
 make_slider_row (GtkWidget    *grid,
                  gint          row,
@@ -1120,8 +1145,12 @@ static void
 construct_quick_settings (XfcePanelPlugin *plugin)
 {
   QuickSettings *qs;
-  GtkWidget     *grid;
+  GtkWidget     *box;
+  GtkWidget     *vol_grid;
+  GtkWidget     *display_grid;
+  GtkWidget     *conn_grid;
   GtkWidget     *separator;
+  GtkWidget     *placeholder;
 
   qs = g_new0 (QuickSettings, 1);
   qs->plugin = plugin;
@@ -1145,26 +1174,40 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_window_set_type_hint (GTK_WINDOW (qs->popup), GDK_WINDOW_TYPE_HINT_POPUP_MENU);
   gtk_widget_set_size_request (qs->popup, 300, -1);
 
-  grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
-  gtk_grid_set_column_spacing (GTK_GRID (grid), 10);
-  gtk_container_set_border_width (GTK_CONTAINER (grid), 12);
-  gtk_container_add (GTK_CONTAINER (qs->popup), grid);
+  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+  gtk_container_set_border_width (GTK_CONTAINER (box), 12);
+  gtk_container_add (GTK_CONTAINER (qs->popup), box);
 
-  make_slider_row (grid, 0, 150, "audio-volume-high-symbolic", "Volume",
+  /* Volume group: level slider + output/input device selectors. */
+  vol_grid = make_group (box, "Volume");
+  make_slider_row (vol_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
   /* Tick mark showing where 100% ends and overamplification begins. */
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
-  make_slider_row (grid, 1, 100, "display-brightness-symbolic", "Screen brightness",
+  qs->sink_combo = make_device_row (vol_grid, 1, "audio-speakers-symbolic",
+                                    "Audio output device");
+  qs->source_combo = make_device_row (vol_grid, 2,
+                                      "audio-input-microphone-symbolic",
+                                      "Audio input device");
+
+  separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+  gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);
+
+  /* Display group. */
+  display_grid = make_group (box, "Display");
+  make_slider_row (display_grid, 0, 100, "display-brightness-symbolic",
+                   "Screen brightness",
                    &qs->bright_icon, &qs->bright_scale);
 
   separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-  gtk_grid_attach (GTK_GRID (grid), separator, 0, 2, 2, 1);
+  gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);
 
-  qs->sink_combo = make_device_row (grid, 3, "audio-speakers-symbolic",
-                                    "Audio output device");
-  qs->source_combo = make_device_row (grid, 4, "audio-input-microphone-symbolic",
-                                      "Audio input device");
+  /* Connection group (controls arrive in a next step). */
+  conn_grid = make_group (box, "Connection");
+  placeholder = gtk_label_new ("Coming soon");
+  gtk_widget_set_sensitive (placeholder, FALSE);
+  gtk_widget_set_halign (placeholder, GTK_ALIGN_START);
+  gtk_grid_attach (GTK_GRID (conn_grid), placeholder, 0, 0, 1, 1);
 
   g_signal_connect (qs->vol_scale, "value-changed",
                     G_CALLBACK (on_volume_changed), qs);
