@@ -27,6 +27,18 @@ make_group (GtkWidget   *box,
   return grid;
 }
 
+GtkWidget *
+make_plain_grid (GtkWidget *box)
+{
+  GtkWidget *grid = gtk_grid_new ();
+
+  gtk_grid_set_row_spacing (GTK_GRID (grid), 8);
+  gtk_grid_set_column_spacing (GTK_GRID (grid), 10);
+  gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
+
+  return grid;
+}
+
 void
 make_slider_row (GtkWidget    *grid,
                  gint          row,

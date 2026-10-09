@@ -8,6 +8,8 @@ void ui_load_css (void);
 /* Titled group inside box. Returns the content grid for attaching rows. */
 GtkWidget *make_group (GtkWidget   *box,
                        const gchar *title);
+/* Headerless grid with the same spacing (for shared sections). */
+GtkWidget *make_plain_grid (GtkWidget *box);
 void make_slider_row (GtkWidget    *grid,
                       gint          row,
                       gdouble       max,

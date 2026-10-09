@@ -18,8 +18,9 @@ typedef struct
   gboolean  is_default;
 } AudioDev;
 
-/* Builds the Volume tile + sub-page (slider + output/input selectors). */
-void audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs);
+/* Builds the Volume slider + devices tile on the shared grid (rows 0-1),
+ * plus the Audio devices sub-page (output/input selectors). */
+void audio_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs);
 /* Refresh slider position/icon from the current system volume. */
 void audio_refresh_volume (QuickSettings *qs);
 /* Reload output/input device lists and select the current defaults. */

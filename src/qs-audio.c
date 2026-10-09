@@ -598,22 +598,21 @@ on_audio_back_clicked (GtkButton *button,
 }
 
 void
-audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
+audio_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *vol_grid = make_group (box, "Volume");
   GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   GtkWidget *audio_tile;
   GtkWidget *audio_page;
   GtkWidget *audio_grid;
   GtkWidget *audio_back;
 
-  /* Slider stays on the main page; selectors live on the sub-page. */
-  make_slider_row (vol_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
+  /* Slider on the shared top grid; selectors live on the sub-page. */
+  make_slider_row (grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
   /* Tick mark showing where 100% ends and overamplification begins. */
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
   gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
-  gtk_grid_attach (GTK_GRID (vol_grid), tile_box, 0, 1, 2, 1);
+  gtk_grid_attach (GTK_GRID (grid), tile_box, 0, 1, 2, 1);
   audio_tile = make_tile (tile_box, "audio-speakers-symbolic",
                            "Audio devices");
   g_signal_connect (audio_tile, "clicked",

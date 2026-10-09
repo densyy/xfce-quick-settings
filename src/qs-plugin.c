@@ -133,6 +133,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
 {
   QuickSettings *qs;
   GtkWidget     *box;
+  GtkWidget     *top_grid;
   GtkWidget     *separator;
 
   qs = g_new0 (QuickSettings, 1);
@@ -168,13 +169,15 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_container_set_border_width (GTK_CONTAINER (box), 12);
   gtk_stack_add_named (GTK_STACK (qs->stack), box, "main");
 
-  /* Each section is built by its own module. */
-  audio_build_section (box, qs->stack, qs);
+  /* Each section is built by its own module. Sliders share one
+   * headerless grid: audio rows 0-1, display rows 2-3. */
+  top_grid = make_plain_grid (box);
+  audio_build_section (top_grid, qs->stack, qs);
 
   separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);
 
-  display_build_section (box, qs->stack, qs);
+  display_build_section (top_grid, qs->stack, qs);
 
   separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);

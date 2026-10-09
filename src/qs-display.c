@@ -311,22 +311,21 @@ on_night_back_clicked (GtkButton *button,
 }
 
 void
-display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
+display_build_section (GtkWidget *grid, GtkWidget *stack, QuickSettings *qs)
 {
-  GtkWidget *display_grid = make_group (box, "Display");
   GtkWidget *night_tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
   GtkWidget *night_tile;
   GtkWidget *night_page;
   GtkWidget *preset_box;
   GtkWidget *night_back;
 
-  make_slider_row (display_grid, 0, 100, "display-brightness-symbolic",
+  make_slider_row (grid, 2, 100, "display-brightness-symbolic",
                    "Screen brightness",
                    NULL, &qs->bright_scale);
 
-  /* Tile on the main page; presets live on the sub-page. */
+  /* Tile on the shared grid; presets live on the sub-page. */
   gtk_box_set_homogeneous (GTK_BOX (night_tile_box), TRUE);
-  gtk_grid_attach (GTK_GRID (display_grid), night_tile_box, 0, 1, 2, 1);
+  gtk_grid_attach (GTK_GRID (grid), night_tile_box, 0, 3, 2, 1);
   night_tile = make_tile (night_tile_box, "weather-clear-night-symbolic",
                            "Night Light");
   g_signal_connect (night_tile, "clicked",
