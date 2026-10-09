@@ -130,7 +130,7 @@ make_nav_tile (GtkWidget    *box,
 
   ui_add_class (button, "qs-tile");
   gtk_image_set_pixel_size (GTK_IMAGE (image), QS_MAIN_ICON_PX);
-  gtk_container_set_border_width (GTK_CONTAINER (hbox), QS_TIGHT_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (hbox), QS_CONTENT_PAD);
   ui_add_class (title_label, "qs-title");
   gtk_widget_set_halign (title_label, GTK_ALIGN_START);
   gtk_box_pack_start (GTK_BOX (vbox), title_label, FALSE, FALSE, 0);
@@ -166,7 +166,7 @@ make_mini_tile (GtkWidget    *box,
 
   ui_add_class (button, "qs-tile");
   gtk_image_set_pixel_size (GTK_IMAGE (image), QS_MAIN_ICON_PX);
-  gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_INNER_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_CONTENT_PAD);
   gtk_widget_set_halign (image, GTK_ALIGN_CENTER);
   ui_add_class (title_label, "qs-mini-title");
   gtk_widget_set_halign (title_label, GTK_ALIGN_CENTER);
@@ -202,7 +202,7 @@ make_meter (GtkWidget    *grid,
   GtkWidget *bar = gtk_progress_bar_new ();
 
   ui_add_class (card, "qs-card");
-  gtk_container_set_border_width (GTK_CONTAINER (card), QS_INNER_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (card), QS_CONTENT_PAD);
   ui_add_class (name_label, "qs-sub");
   gtk_widget_set_halign (name_label, GTK_ALIGN_START);
   gtk_widget_set_hexpand (name_label, TRUE);
@@ -338,6 +338,8 @@ ui_load_css (void)
     " border-color: alpha(@theme_selected_bg_color, 0.6);"
     " color: @theme_fg_color; }"
     ".qs-card { background-color: @theme_base_color;"
+    " border: 1px solid @borders; border-radius: 10px; }"
+    ".qs-notice { background-color: @theme_bg_color;"
     " border: 1px solid @borders; border-radius: 10px; }"
     "list.qs-list { background-color: transparent; border: none; }"
     "list.qs-list row { background-image: none; background-color: transparent;"

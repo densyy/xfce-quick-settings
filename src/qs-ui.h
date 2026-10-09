@@ -15,6 +15,9 @@
 #define QS_SECTION_GAP 12
 #define QS_INNER_GAP 8
 #define QS_TIGHT_GAP 4
+/* Standard inner padding between a container edge and its content
+ * (power buttons, cards, rows, tiles). Reuse everywhere. */
+#define QS_CONTENT_PAD 10
 
 /* Adds a style class to a widget. */
 void ui_add_class (GtkWidget   *widget,

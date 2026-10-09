@@ -80,6 +80,7 @@ make_power_button (GtkWidget   *box,
   ui_add_class (button, "qs-btn");
   gtk_image_set_pixel_size (GTK_IMAGE (image), QS_ROW_ICON_PX);
   ui_add_class (text, "qs-title");
+  gtk_container_set_border_width (GTK_CONTAINER (hbox), QS_CONTENT_PAD);
   gtk_box_pack_start (GTK_BOX (hbox), image, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (hbox), text, FALSE, FALSE, 0);
   gtk_container_add (GTK_CONTAINER (button), hbox);

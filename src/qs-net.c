@@ -267,7 +267,7 @@ style_card_row (GtkWidget *row,
   gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
-  gtk_container_set_border_width (GTK_CONTAINER (content), QS_INNER_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (content), QS_CONTENT_PAD);
 }
 
 static void

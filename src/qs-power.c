@@ -270,7 +270,7 @@ power_build_section (GtkWidget *box, QuickSettings *qs)
   ui_add_class (bat_card, "qs-card");
   gtk_box_pack_start (GTK_BOX (qs->bat_box), bat_card, FALSE, FALSE, 0);
   bat_hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_PAGE_PAD);
-  gtk_container_set_border_width (GTK_CONTAINER (bat_hbox), QS_INNER_GAP + 2);
+  gtk_container_set_border_width (GTK_CONTAINER (bat_hbox), QS_CONTENT_PAD);
   qs->bat_icon = gtk_image_new_from_icon_name ("battery-missing-symbolic",
                                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
   gtk_image_set_pixel_size (GTK_IMAGE (qs->bat_icon), 32);

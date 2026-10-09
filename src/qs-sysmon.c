@@ -356,10 +356,7 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 
   /* Sub-page: RAM + CPU meter cards, then one card per disk. */
   page = make_sub_page ("System", &back);
-  content = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (content), QS_INNER_GAP);
-  gtk_grid_set_column_spacing (GTK_GRID (content), QS_PAGE_PAD);
-  gtk_box_pack_start (GTK_BOX (page), content, FALSE, FALSE, 0);
+  content = make_group (page, "Monitor");
   make_meter (content, 0, "Memory",
               &qs->sysmon_ram_value, &qs->sysmon_ram_bar);
   make_meter (content, 1, "Processor",

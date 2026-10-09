@@ -285,7 +285,7 @@ make_night_button (GtkWidget   *grid,
   ui_add_class (button, "qs-tile");
   gtk_image_set_pixel_size (GTK_IMAGE (image), QS_MAIN_ICON_PX);
   gtk_widget_set_halign (image, GTK_ALIGN_CENTER);
-  gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_INNER_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_CONTENT_PAD);
   ui_add_class (text, "qs-mini-title");
   gtk_widget_set_halign (text, GTK_ALIGN_CENTER);
   ui_add_class (sub, "qs-sub");
