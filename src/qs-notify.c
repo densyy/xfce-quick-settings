@@ -51,8 +51,12 @@ list_notices (void)
       return NULL;
     }
   quoted = g_shell_quote (path);
+  /* Newlines inside summary/body would split rows when parsing below,
+   * so flatten them in SQL (the list stays newest-first, up to 30). */
   cmd = g_strdup_printf ("sqlite3 -separator '\x1f' %s \"SELECT app_name, "
-                         "summary, body, timestamp FROM notifications "
+                         "replace(summary, char(10), ' '), "
+                         "replace(body, char(10), ' '), timestamp "
+                         "FROM notifications "
                          "ORDER BY timestamp DESC LIMIT %d;\"",
                          quoted, NOTIFY_MAX_ROWS);
   g_free (quoted);

@@ -159,6 +159,7 @@ set_brightness_percent (gint value)
             {
               max_brightness = atoi (contents);
               g_free (contents);
+              contents = NULL;
               if (max_brightness > 0)
                 {
                   bright_path = g_build_filename ("/sys/class/backlight",
