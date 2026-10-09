@@ -152,13 +152,14 @@ set_volume_percent (gint value)
 {
   gchar *cmd;
 
-  value = CLAMP (value, 0, 100);
+  value = CLAMP (value, 0, 150);
   if (command_exists ("pactl"))
     cmd = g_strdup_printf ("pactl set-sink-volume @DEFAULT_SINK@ %d%%", value);
   else if (command_exists ("wpctl"))
     cmd = g_strdup_printf ("wpctl set-volume @DEFAULT_AUDIO_SINK@ %d%%", value);
   else if (command_exists ("amixer"))
-    cmd = g_strdup_printf ("amixer -q sset Master %d%%", value);
+    /* ALSA caps at 100%, no overamplification. */
+    cmd = g_strdup_printf ("amixer -q sset Master %d%%", CLAMP (value, 0, 100));
   else
     return;
   spawn_command (cmd);
@@ -168,6 +169,8 @@ set_volume_percent (gint value)
 static const gchar *
 volume_icon_for_level (gint percent)
 {
+  if (percent > 100)
+    return "audio-volume-overamplified-symbolic";
   if (percent <= 0)
     return "audio-volume-muted-symbolic";
   if (percent <= 33)
@@ -790,6 +793,7 @@ set_default_source (QuickSettings *qs,
 static GtkWidget *
 make_slider_row (GtkWidget    *grid,
                  gint          row,
+                 gdouble       max,
                  const gchar  *icon_name,
                  const gchar  *tooltip,
                  GtkWidget   **icon_out,
@@ -803,7 +807,7 @@ make_slider_row (GtkWidget    *grid,
   gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
   gtk_grid_attach (GTK_GRID (grid), icon, 0, row, 1, 1);
 
-  scale = gtk_scale_new_with_range (GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
+  scale = gtk_scale_new_with_range (GTK_ORIENTATION_HORIZONTAL, 0, max, 1);
   gtk_scale_set_digits (GTK_SCALE (scale), 0);
   gtk_scale_set_draw_value (GTK_SCALE (scale), TRUE);
   gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_RIGHT);
@@ -877,6 +881,8 @@ refresh_slider_values (QuickSettings *qs)
   qs->updating = TRUE;
 
   volume = get_volume_percent ();
+  /* pactl allows > 150% (set externally); the slider tops out at 150. */
+  volume = (volume > 150) ? 150 : volume;
   if (volume >= 0)
     {
       gtk_range_set_value (GTK_RANGE (qs->vol_scale), volume);
@@ -884,7 +890,10 @@ refresh_slider_values (QuickSettings *qs)
                                     volume_icon_for_level (volume),
                                     GTK_ICON_SIZE_LARGE_TOOLBAR);
       gtk_widget_set_sensitive (qs->vol_scale, TRUE);
-      gtk_widget_set_tooltip_text (qs->vol_scale, "Volume");
+      gtk_widget_set_tooltip_text (qs->vol_scale,
+                                   volume > 100
+                                   ? "Volume (boosted above 100%)"
+                                   : "Volume");
     }
   else
     {
@@ -957,6 +966,10 @@ on_volume_changed (GtkRange *range,
   gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
                                 volume_icon_for_level (value),
                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_widget_set_tooltip_text (qs->vol_scale,
+                               value > 100
+                               ? "Volume (boosted above 100%)"
+                               : "Volume");
 }
 
 static void
@@ -1138,9 +1151,11 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_container_set_border_width (GTK_CONTAINER (grid), 12);
   gtk_container_add (GTK_CONTAINER (qs->popup), grid);
 
-  make_slider_row (grid, 0, "audio-volume-high-symbolic", "Volume",
+  make_slider_row (grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
-  make_slider_row (grid, 1, "display-brightness-symbolic", "Screen brightness",
+  /* Tick mark showing where 100% ends and overamplification begins. */
+  gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
+  make_slider_row (grid, 1, 100, "display-brightness-symbolic", "Screen brightness",
                    &qs->bright_icon, &qs->bright_scale);
 
   separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
