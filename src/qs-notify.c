@@ -120,7 +120,7 @@ make_notice_row (Notice *n)
   gchar     *time;
   gchar     *sub_text;
 
-  ui_add_class (row, "qs-notice");
+  ui_add_class (row, "qs-card");
   gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
