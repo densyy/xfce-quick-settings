@@ -187,43 +187,6 @@ make_mini_tile (GtkWidget    *box,
   return button;
 }
 
-/* Stat card: one qs-card box holding plain key/value rows. Values are
- * updated in place with gtk_label_set_text: no bars, no widget churn. */
-GtkWidget *
-make_stat_card (GtkWidget *grid,
-                gint       row)
-{
-  GtkWidget *card = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
-
-  ui_add_class (card, "qs-card");
-  gtk_container_set_border_width (GTK_CONTAINER (card), QS_CONTENT_PAD);
-  gtk_grid_attach (GTK_GRID (grid), card, 0, row, 2, 1);
-  return card;
-}
-
-void
-make_stat_row (GtkWidget    *card,
-               const gchar  *name,
-               GtkWidget   **value_out)
-{
-  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
-  GtkWidget *name_label = gtk_label_new (name);
-  GtkWidget *value = gtk_label_new ("—");
-
-  ui_add_class (name_label, "qs-sub");
-  gtk_widget_set_halign (name_label, GTK_ALIGN_START);
-  gtk_widget_set_hexpand (name_label, TRUE);
-  gtk_label_set_ellipsize (GTK_LABEL (name_label), PANGO_ELLIPSIZE_END);
-  ui_add_class (value, "qs-title");
-  gtk_widget_set_halign (value, GTK_ALIGN_END);
-  gtk_box_pack_start (GTK_BOX (row), name_label, TRUE, TRUE, 0);
-  gtk_box_pack_start (GTK_BOX (row), value, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (card), row, FALSE, FALSE, 0);
-
-  if (value_out != NULL)
-    *value_out = value;
-}
-
 /* Generic sub-page: header (back + title + switch), scan button,
  * scrollable list, status line. */
 GtkWidget *

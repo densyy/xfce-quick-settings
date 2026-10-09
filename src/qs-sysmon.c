@@ -1,10 +1,7 @@
 #include "qs-sysmon.h"
 #include "qs-ui.h"
-#include "qs-util.h"
 
 #include <sys/statvfs.h>
-
-#define SYSMON_INTERVAL_S 10
 
 /* Pseudo-filesystems never shown as disks. */
 static const gchar *skip_fs[] = {
@@ -29,9 +26,9 @@ fs_skipped (const gchar *fstype,
   return FALSE;
 }
 
-static gboolean
-read_meminfo (guint64 *total_kb,
-              guint64 *avail_kb)
+gboolean
+sysmon_read_memory (guint64 *total_kb,
+                    guint64 *avail_kb)
 {
   gchar  *content = NULL;
   gchar **lines;
@@ -74,8 +71,8 @@ read_meminfo (guint64 *total_kb,
 }
 
 /* CPU usage 0-100. First call uses since-boot averages, then deltas. */
-static gdouble
-read_cpu_percent (QuickSettings *qs)
+gdouble
+sysmon_read_cpu (QuickSettings *qs)
 {
   gchar   *content = NULL;
   gchar  **lines;
@@ -127,9 +124,9 @@ read_cpu_percent (QuickSettings *qs)
   return CLAMP (percent, 0.0, 100.0);
 }
 
-static gchar *
-bytes_text (guint64 bytes,
-            guint64 total)
+gchar *
+sysmon_bytes_text (guint64 bytes,
+                   guint64 total)
 {
   gdouble pct = (total == 0) ? 0.0
                              : 100.0 * (gdouble) bytes / (gdouble) total;
@@ -170,175 +167,89 @@ unescape_mount (const gchar *s)
 }
 
 static void
-sysmon_refresh (QuickSettings *qs)
+disk_elem_free (gpointer data)
 {
-  guint64  total_kb = 0;
-  guint64  avail_kb = 0;
-  guint64  used_bytes;
-  guint64  total_bytes;
-  gdouble  cpu;
-  gchar   *text;
-  gchar   *content = NULL;
-  gchar  **lines;
-  gint     i;
+  SysmonDisk *disk = data;
 
-  /* RAM + CPU: update the value labels in place (no widget churn). */
-  if (read_meminfo (&total_kb, &avail_kb) && total_kb > 0)
-    {
-      used_bytes = (total_kb - MIN (avail_kb, total_kb)) * 1024;
-      total_bytes = total_kb * 1024;
-      text = bytes_text (used_bytes, total_bytes);
-      gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
-      g_free (text);
-    }
-  cpu = read_cpu_percent (qs);
-  if (cpu >= 0.0)
-    {
-      text = g_strdup_printf ("%d%%", (gint) (cpu + 0.5));
-      gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value), text);
-      g_free (text);
-    }
-
-  /* Disks: gather the data first, then only touch widgets when the
-   * device set changed; otherwise update the value labels in place. */
-  {
-    GPtrArray *names = g_ptr_array_new_with_free_func (g_free);
-    GPtrArray *texts = g_ptr_array_new_with_free_func (g_free);
-    GString   *key = g_string_new (NULL);
-
-    if (g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
-      {
-        /* One row per device: the same partition often appears under
-         * several mount points (bind mounts, btrfs subvolumes). */
-        GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                                  g_free, NULL);
-
-        lines = g_strsplit (content, "\n", -1);
-        g_free (content);
-        content = NULL;
-        for (i = 0; lines[i] != NULL; i++)
-          {
-            gchar **parts = g_strsplit (lines[i], " ", 4);
-            struct statvfs st;
-            guint64 total;
-            guint64 used;
-            gchar *device;
-            gchar *target;
-            const gchar *base;
-
-            if (g_strv_length (parts) < 3)
-              {
-                g_strfreev (parts);
-                continue;
-              }
-            device = unescape_mount (parts[0]);
-            target = unescape_mount (parts[1]);
-            if (fs_skipped (parts[2], device)
-                || statvfs (target, &st) != 0
-                || st.f_blocks == 0
-                || st.f_frsize == 0
-                || g_hash_table_contains (seen, device))
-              {
-                g_free (device);
-                g_free (target);
-                g_strfreev (parts);
-                continue;
-              }
-            g_hash_table_add (seen, g_strdup (device));
-            total = (guint64) st.f_blocks * st.f_frsize;
-            used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
-            base = device;
-            if (g_str_has_prefix (device, "/dev/"))
-              base += strlen ("/dev/");
-            g_string_append (key, device);
-            g_string_append_c (key, '|');
-            g_ptr_array_add (names, g_strdup (base));
-            g_ptr_array_add (texts, bytes_text (used, total));
-            g_free (device);
-            g_free (target);
-            g_strfreev (parts);
-          }
-        g_strfreev (lines);
-        g_hash_table_destroy (seen);
-      }
-
-    if (g_strcmp0 (key->str, qs->sysmon_disk_key) == 0)
-      {
-        /* Same devices: refresh the values in place. */
-        GList *rows = gtk_container_get_children (GTK_CONTAINER (qs->sysmon_disk_box));
-        GList *l;
-        guint  idx = 0;
-
-        for (l = rows; l != NULL && idx < texts->len; l = l->next, idx++)
-          {
-            GList     *cols = gtk_container_get_children (GTK_CONTAINER (l->data));
-            GtkWidget *value = GTK_WIDGET (g_list_last (cols)->data);
-
-            if (GTK_IS_LABEL (value))
-              gtk_label_set_text (GTK_LABEL (value),
-                                  g_ptr_array_index (texts, idx));
-            g_list_free (cols);
-          }
-        g_list_free (rows);
-        g_string_free (key, TRUE);
-      }
-    else
-      {
-        guint idx;
-
-        clear_list_box (qs->sysmon_disk_box);
-        if (names->len == 0)
-          {
-            GtkWidget *empty = gtk_label_new ("No disks found");
-
-            ui_add_class (empty, "qs-status");
-            gtk_widget_set_halign (empty, GTK_ALIGN_START);
-            gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), empty,
-                                FALSE, FALSE, 0);
-          }
-        else
-          {
-            for (idx = 0; idx < names->len; idx++)
-              {
-                GtkWidget *value = NULL;
-
-                make_stat_row (qs->sysmon_disk_box,
-                               g_ptr_array_index (names, idx), &value);
-                gtk_label_set_text (GTK_LABEL (value),
-                                    g_ptr_array_index (texts, idx));
-              }
-          }
-        g_free (qs->sysmon_disk_key);
-        qs->sysmon_disk_key = g_string_free (key, FALSE);
-        gtk_widget_show_all (qs->sysmon_disk_box);
-      }
-    g_ptr_array_free (names, TRUE);
-    g_ptr_array_free (texts, TRUE);
-  }
-}
-
-static gboolean
-sysmon_tick (gpointer data)
-{
-  QuickSettings *qs = data;
-
-  if (qs->dead)
-    {
-      qs->sysmon_timer = 0;
-      return G_SOURCE_REMOVE;
-    }
-  sysmon_refresh (qs);
-  return G_SOURCE_CONTINUE;
+  g_free (disk->name);
+  g_free (disk->text);
+  g_free (disk);
 }
 
 void
-sysmon_stop (QuickSettings *qs)
+sysmon_free_disks (GPtrArray *disks)
 {
-  if (qs->sysmon_timer != 0)
-    {
-      g_source_remove (qs->sysmon_timer);
-      qs->sysmon_timer = 0;
-    }
+  if (disks == NULL)
+    return;
+  g_ptr_array_free (disks, TRUE);
+}
+
+/* One entry per device: the same partition often appears under several
+ * mount points (bind mounts, btrfs subvolumes). Caller frees the list
+ * with sysmon_free_disks. */
+GPtrArray *
+sysmon_read_disks (void)
+{
+  GPtrArray *disks = g_ptr_array_new_with_free_func (disk_elem_free);
+  gchar     *content = NULL;
+  gchar    **lines;
+  gint        i;
+
+  if (!g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
+    return disks;
+  {
+    GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                              g_free, NULL);
+
+    lines = g_strsplit (content, "\n", -1);
+    g_free (content);
+    for (i = 0; lines[i] != NULL; i++)
+      {
+        gchar **parts = g_strsplit (lines[i], " ", 4);
+        struct statvfs st;
+        guint64 total;
+        guint64 used;
+        gchar *device;
+        gchar *target;
+        const gchar *base;
+        SysmonDisk *disk;
+
+        if (g_strv_length (parts) < 3)
+          {
+            g_strfreev (parts);
+            continue;
+          }
+        device = unescape_mount (parts[0]);
+        target = unescape_mount (parts[1]);
+        if (fs_skipped (parts[2], device)
+            || statvfs (target, &st) != 0
+            || st.f_blocks == 0
+            || st.f_frsize == 0
+            || g_hash_table_contains (seen, device))
+          {
+            g_free (device);
+            g_free (target);
+            g_strfreev (parts);
+            continue;
+          }
+        g_hash_table_add (seen, g_strdup (device));
+        total = (guint64) st.f_blocks * st.f_frsize;
+        used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
+        base = device;
+        if (g_str_has_prefix (device, "/dev/"))
+          base += strlen ("/dev/");
+        disk = g_new (SysmonDisk, 1);
+        disk->name = g_strdup (base);
+        disk->text = sysmon_bytes_text (used, total);
+        g_ptr_array_add (disks, disk);
+        g_free (device);
+        g_free (target);
+        g_strfreev (parts);
+      }
+    g_strfreev (lines);
+    g_hash_table_destroy (seen);
+  }
+  return disks;
 }
 
 static void
@@ -348,10 +259,6 @@ on_sysmon_tile_clicked (GtkButton *button,
   QuickSettings *qs = user_data;
 
   (void) button;
-  sysmon_refresh (qs);
-  if (qs->sysmon_timer == 0)
-    qs->sysmon_timer = g_timeout_add_seconds (SYSMON_INTERVAL_S,
-                                              sysmon_tick, qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "sysmon");
 }
 
@@ -362,16 +269,7 @@ on_sysmon_back_clicked (GtkButton *button,
   QuickSettings *qs = user_data;
 
   (void) button;
-  sysmon_stop (qs);
   show_main_page (qs);
-}
-
-static void
-on_sysmon_popup_hide (GtkWidget *widget,
-                      gpointer   user_data)
-{
-  (void) widget;
-  sysmon_stop (user_data);
 }
 
 void
@@ -379,9 +277,6 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *sys_tile;
   GtkWidget *page;
-  GtkWidget *content;
-  GtkWidget *monitor_card;
-  GtkWidget *disks_grid;
   GtkWidget *back;
 
   /* Mini tile in the shared action grid. */
@@ -389,18 +284,9 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);
 
-  /* Sub-page: one stat card for Monitor, one for Disks. Values are
-   * plain labels updated in place (no progress bars). */
+  /* Sub-page shell only: the fresh component goes here. */
   page = make_sub_page ("System", &back);
-  content = make_group (page, "Monitor");
-  monitor_card = make_stat_card (content, 0);
-  make_stat_row (monitor_card, "Memory", &qs->sysmon_ram_value);
-  make_stat_row (monitor_card, "Processor", &qs->sysmon_cpu_value);
-  disks_grid = make_group (page, "Disks");
-  qs->sysmon_disk_box = make_stat_card (disks_grid, 0);
   gtk_stack_add_named (GTK_STACK (stack), page, "sysmon");
   g_signal_connect (back, "clicked",
                     G_CALLBACK (on_sysmon_back_clicked), qs);
-  g_signal_connect (qs->popup, "hide",
-                    G_CALLBACK (on_sysmon_popup_hide), qs);
 }
