@@ -1,7 +1,7 @@
 #ifndef QS_UI_H
 #define QS_UI_H
 
-#include "qs-audio.h"
+#include "qs-core.h"
 
 /* Loads the tile CSS once. */
 void ui_load_css (void);
@@ -17,13 +17,6 @@ void make_slider_row (GtkWidget    *grid,
                       const gchar  *tooltip,
                       GtkWidget   **icon_out,
                       GtkWidget   **scale_out);
-GtkWidget *make_device_row (GtkWidget   *grid,
-                            gint         row,
-                            const gchar *icon_name,
-                            const gchar *tooltip);
-void fill_device_combo (GtkWidget *combo,
-                        GList     *devs,
-                        const gchar *empty_text);
 void set_tile_active (GtkWidget *tile,
                       gboolean   active);
 GtkWidget *make_tile (GtkWidget   *box,

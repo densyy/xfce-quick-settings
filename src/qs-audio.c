@@ -491,6 +491,59 @@ set_default_source (QuickSettings *qs,
       g_free (cmd);
     }
 }
+/* Icon + combo row on the shared grid; returns the combo. */
+static GtkWidget *
+make_device_row (GtkWidget   *grid,
+                 gint         row,
+                 const gchar *icon_name,
+                 const gchar *tooltip)
+{
+  GtkWidget *icon;
+  GtkWidget *combo;
+
+  icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_widget_set_halign (icon, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+  gtk_grid_attach (GTK_GRID (grid), icon, 0, row, 1, 1);
+
+  combo = gtk_combo_box_text_new ();
+  gtk_widget_set_hexpand (combo, TRUE);
+  gtk_widget_set_tooltip_text (combo, tooltip);
+  gtk_grid_attach (GTK_GRID (grid), combo, 1, row, 1, 1);
+
+  return combo;
+}
+
+/* Fill combo with devices, selecting the default one. */
+static void
+fill_device_combo (GtkWidget   *combo,
+                   GList       *devs,
+                   const gchar *empty_text)
+{
+  GList *l;
+
+  gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (combo));
+  for (l = devs; l != NULL; l = l->next)
+    {
+      AudioDev *dev = l->data;
+
+      gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo),
+                                 dev->id, dev->label);
+      if (dev->is_default)
+        gtk_combo_box_set_active_id (GTK_COMBO_BOX (combo), dev->id);
+    }
+  if (devs == NULL)
+    {
+      gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo), "none", empty_text);
+      gtk_combo_box_set_active (GTK_COMBO_BOX (combo), 0);
+      gtk_widget_set_sensitive (combo, FALSE);
+    }
+  else
+    {
+      gtk_widget_set_sensitive (combo, TRUE);
+    }
+}
+
 /* Reload output/input device lists and select the current defaults. */
 void
 audio_refresh_devices (QuickSettings *qs)
