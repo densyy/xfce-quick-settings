@@ -229,6 +229,11 @@ sysmon_refresh (QuickSettings *qs)
   gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), disk_grid, FALSE, FALSE, 0);
   if (g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
     {
+      /* One row per device: the same partition often appears under
+       * several mount points (bind mounts, btrfs subvolumes). */
+      GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                g_free, NULL);
+
       lines = g_strsplit (content, "\n", -1);
       g_free (content);
       for (i = 0; lines[i] != NULL; i++)
@@ -240,6 +245,7 @@ sysmon_refresh (QuickSettings *qs)
           GtkWidget *bar;
           gchar *device;
           gchar *target;
+          const gchar *base;
           gchar *name;
 
           if (g_strv_length (parts) < 3)
@@ -252,16 +258,21 @@ sysmon_refresh (QuickSettings *qs)
           if (fs_skipped (parts[2], device)
               || statvfs (target, &st) != 0
               || st.f_blocks == 0
-              || st.f_frsize == 0)
+              || st.f_frsize == 0
+              || g_hash_table_contains (seen, device))
             {
               g_free (device);
               g_free (target);
               g_strfreev (parts);
               continue;
             }
+          g_hash_table_add (seen, g_strdup (device));
           total = (guint64) st.f_blocks * st.f_frsize;
           used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
-          name = g_strdup_printf ("%s · %s", device, target);
+          base = device;
+          if (g_str_has_prefix (device, "/dev/"))
+            base += strlen ("/dev/");
+          name = g_strdup (base);
           g_free (device);
           g_free (target);
           bar = add_meter (disk_grid, row++, name);
@@ -274,6 +285,7 @@ sysmon_refresh (QuickSettings *qs)
           g_strfreev (parts);
         }
       g_strfreev (lines);
+      g_hash_table_destroy (seen);
     }
   if (row == 0)
     {
