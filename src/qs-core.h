@@ -40,6 +40,7 @@ typedef struct
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;
   GtkWidget       *bat_status;
+  guint            power_timer; /* 30s refresh, only while popup is open */
   GtkWidget       *notify_list;
   GtkWidget       *notify_clear;
   GtkWidget       *sysmon_ram_bar;

@@ -4,7 +4,7 @@
 
 #include <sys/statvfs.h>
 
-#define SYSMON_INTERVAL_S 10
+#define SYSMON_INTERVAL_S 5
 
 /* Pseudo-filesystems never shown as disks. */
 static const gchar *skip_fs[] = {

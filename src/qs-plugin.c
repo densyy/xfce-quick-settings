@@ -100,7 +100,7 @@ on_button_clicked (GtkButton *button,
   notify_update_tile (qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
   gtk_widget_show_all (qs->popup);
-  power_refresh (qs); /* after show_all: may hide the battery section */
+  power_start (qs); /* after show_all: starts the 30s timer if visible */
   while (gtk_events_pending ())
     gtk_main_iteration ();
   position_popup (qs);
@@ -129,7 +129,8 @@ quick_settings_free (XfcePanelPlugin *plugin,
   (void) plugin;
 
   qs->dead = TRUE;
-  sysmon_stop (qs); /* drop the timer's implied ref before destroying */
+  sysmon_stop (qs); /* drop the timers' implied refs before destroying */
+  power_stop (qs);
   gtk_widget_destroy (qs->popup);
   qs_unref (qs);
 }

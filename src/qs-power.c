@@ -2,6 +2,8 @@
 #include "qs-ui.h"
 #include "qs-util.h"
 
+#define POWER_INTERVAL_S 30
+
 /* ---------------- battery backend (upower > sysfs) ---------------- */
 
 /* First "upower -e" line mentioning a battery, or NULL (caller frees). */
@@ -249,6 +251,53 @@ power_refresh (QuickSettings *qs)
 
 /* ---------------- section: build ---------------- */
 
+static gboolean
+power_tick (gpointer data)
+{
+  QuickSettings *qs = data;
+
+  if (qs->dead)
+    {
+      qs->power_timer = 0;
+      return G_SOURCE_REMOVE;
+    }
+  power_refresh (qs);
+  /* Battery vanished (or never existed): don't poll in the background. */
+  if (!gtk_widget_get_visible (qs->bat_box))
+    {
+      qs->power_timer = 0;
+      return G_SOURCE_REMOVE;
+    }
+  return G_SOURCE_CONTINUE;
+}
+
+void
+power_stop (QuickSettings *qs)
+{
+  if (qs->power_timer != 0)
+    {
+      g_source_remove (qs->power_timer);
+      qs->power_timer = 0;
+    }
+}
+
+void
+power_start (QuickSettings *qs)
+{
+  power_refresh (qs);
+  if (gtk_widget_get_visible (qs->bat_box) && qs->power_timer == 0)
+    qs->power_timer = g_timeout_add_seconds (POWER_INTERVAL_S,
+                                             power_tick, qs);
+}
+
+static void
+on_power_popup_hide (GtkWidget *widget,
+                     gpointer   user_data)
+{
+  (void) widget;
+  power_stop (user_data);
+}
+
 void
 power_build_section (GtkWidget *box, QuickSettings *qs)
 {
@@ -288,4 +337,6 @@ power_build_section (GtkWidget *box, QuickSettings *qs)
   gtk_box_pack_start (GTK_BOX (bat_hbox), qs->bat_icon, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (bat_hbox), bat_vbox, TRUE, TRUE, 0);
   gtk_box_pack_start (GTK_BOX (bat_card), bat_hbox, FALSE, FALSE, 0);
+  g_signal_connect (qs->popup, "hide",
+                    G_CALLBACK (on_power_popup_hide), qs);
 }
