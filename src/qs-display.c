@@ -245,7 +245,8 @@ on_night_toggled (GtkToggleButton *button,
 {
   QuickSettings *qs = user_data;
   const gchar   *temp = g_object_get_data (G_OBJECT (button), "qs-temp");
-  GtkWidget     *btns[3] = { qs->night_day, qs->night_aft, qs->night_night };
+  GtkWidget     *btns[4] = { qs->night_day, qs->night_aft,
+                             qs->night_night, qs->night_dawn };
   gint           i;
 
   if (qs->updating)
@@ -253,7 +254,7 @@ on_night_toggled (GtkToggleButton *button,
   if (gtk_toggle_button_get_active (button))
     {
       qs->updating = TRUE;
-      for (i = 0; i < 3; i++)
+      for (i = 0; i < 4; i++)
         if (btns[i] != GTK_WIDGET (button))
           gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (btns[i]), FALSE);
       qs->updating = FALSE;
@@ -291,28 +292,65 @@ make_night_button (GtkWidget   *box,
 
 /* ---------------- section: build + refresh ---------------- */
 
+static void
+on_night_tile_clicked (GtkButton *button,
+                       gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) button;
+  gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "night");
+}
+
+static void
+on_night_back_clicked (GtkButton *button,
+                       gpointer   user_data)
+{
+  (void) button;
+  show_main_page (user_data);
+}
+
 void
-display_build_section (GtkWidget *box, QuickSettings *qs)
+display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *display_grid = make_group (box, "Display");
-  GtkWidget *night_box;
+  GtkWidget *night_tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *night_tile;
+  GtkWidget *night_page;
+  GtkWidget *preset_box;
+  GtkWidget *night_back;
 
   make_slider_row (display_grid, 0, 100, "display-brightness-symbolic",
                    "Screen brightness",
                    NULL, &qs->bright_scale);
 
-  /* Night light: one-shot color temperature presets. */
-  night_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  gtk_box_set_homogeneous (GTK_BOX (night_box), TRUE);
-  gtk_grid_attach (GTK_GRID (display_grid), night_box, 0, 1, 2, 1);
-  qs->night_day = make_night_button (night_box, "weather-clear-symbolic",
+  /* Tile on the main page; presets live on the sub-page. */
+  gtk_box_set_homogeneous (GTK_BOX (night_tile_box), TRUE);
+  gtk_grid_attach (GTK_GRID (display_grid), night_tile_box, 0, 1, 2, 1);
+  night_tile = make_tile (night_tile_box, "weather-clear-night-symbolic",
+                           "Night Light");
+  g_signal_connect (night_tile, "clicked",
+                    G_CALLBACK (on_night_tile_clicked), qs);
+
+  /* Sub-page with the color temperature presets. */
+  night_page = make_sub_page ("Night Light", &night_back);
+  preset_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  gtk_box_set_homogeneous (GTK_BOX (preset_box), TRUE);
+  gtk_box_pack_start (GTK_BOX (night_page), preset_box, FALSE, FALSE, 0);
+  qs->night_day = make_night_button (preset_box, "weather-clear-symbolic",
                                      "Day", "6500K", qs);
-  qs->night_aft = make_night_button (night_box, "weather-few-clouds-symbolic",
+  qs->night_aft = make_night_button (preset_box, "weather-few-clouds-symbolic",
                                      "Afternoon", "5500K", qs);
-  qs->night_night = make_night_button (night_box,
+  qs->night_night = make_night_button (preset_box,
                                        "weather-clear-night-symbolic",
                                        "Night", "4500K", qs);
-  gtk_widget_set_sensitive (night_box, night_available ());
+  qs->night_dawn = make_night_button (preset_box,
+                                      "weather-few-clouds-night-symbolic",
+                                      "Madrugada", "3500K", qs);
+  gtk_widget_set_sensitive (preset_box, night_available ());
+  gtk_stack_add_named (GTK_STACK (stack), night_page, "night");
+  g_signal_connect (night_back, "clicked",
+                    G_CALLBACK (on_night_back_clicked), qs);
 
   g_signal_connect (qs->bright_scale, "value-changed",
                     G_CALLBACK (on_brightness_changed), qs);

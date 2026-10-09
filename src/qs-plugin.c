@@ -169,12 +169,12 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_stack_add_named (GTK_STACK (qs->stack), box, "main");
 
   /* Each section is built by its own module. */
-  audio_build_section (box, qs);
+  audio_build_section (box, qs->stack, qs);
 
   separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);
 
-  display_build_section (box, qs);
+  display_build_section (box, qs->stack, qs);
 
   separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
   gtk_box_pack_start (GTK_BOX (box), separator, FALSE, FALSE, 2);

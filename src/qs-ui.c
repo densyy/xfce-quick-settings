@@ -237,3 +237,34 @@ ui_load_css (void)
   g_object_unref (provider);
   css_loaded = TRUE;
 }
+
+/* Sub-page shell: header (back + bold title), custom content packed below. */
+GtkWidget *
+make_sub_page (const gchar *title,
+               GtkWidget  **back_out)
+{
+  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+  GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *back = gtk_button_new_from_icon_name ("go-previous-symbolic",
+                                                   GTK_ICON_SIZE_BUTTON);
+  GtkWidget *title_label = gtk_label_new (NULL);
+  gchar     *markup = g_strdup_printf ("<b>%s</b>", title);
+
+  gtk_container_set_border_width (GTK_CONTAINER (page), 12);
+  gtk_label_set_markup (GTK_LABEL (title_label), markup);
+  g_free (markup);
+  gtk_widget_set_hexpand (title_label, TRUE);
+  gtk_widget_set_halign (title_label, GTK_ALIGN_START);
+  gtk_box_pack_start (GTK_BOX (header), back, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (header), title_label, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (page), header, FALSE, FALSE, 0);
+
+  *back_out = back;
+  return page;
+}
+
+void
+show_main_page (QuickSettings *qs)
+{
+  gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
+}

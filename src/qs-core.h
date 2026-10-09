@@ -31,6 +31,7 @@ typedef struct
   GtkWidget       *night_day;
   GtkWidget       *night_aft;
   GtkWidget       *night_night;
+  GtkWidget       *night_dawn;
   GtkWidget       *bat_box;
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;

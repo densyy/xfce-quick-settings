@@ -577,20 +577,61 @@ on_source_changed (GtkComboBox *combo,
 
 /* ---------------- section: build + refresh ---------------- */
 
+static void
+on_audio_tile_clicked (GtkButton *button,
+                       gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) button;
+  audio_refresh_volume (qs);
+  audio_refresh_devices (qs);
+  gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "audio");
+}
+
+static void
+on_audio_back_clicked (GtkButton *button,
+                       gpointer   user_data)
+{
+  (void) button;
+  show_main_page (user_data);
+}
+
 void
-audio_build_section (GtkWidget *box, QuickSettings *qs)
+audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *vol_grid = make_group (box, "Volume");
+  GtkWidget *tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *audio_tile;
+  GtkWidget *audio_page;
+  GtkWidget *audio_grid;
+  GtkWidget *audio_back;
 
-  make_slider_row (vol_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
+  /* Tile on the main page; controls live on the sub-page. */
+  gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
+  gtk_grid_attach (GTK_GRID (vol_grid), tile_box, 0, 0, 2, 1);
+  audio_tile = make_tile (tile_box, "audio-volume-high-symbolic", "Volume");
+  g_signal_connect (audio_tile, "clicked",
+                    G_CALLBACK (on_audio_tile_clicked), qs);
+
+  /* Sub-page with slider + device selectors. */
+  audio_page = make_sub_page ("Volume", &audio_back);
+  audio_grid = gtk_grid_new ();
+  gtk_grid_set_row_spacing (GTK_GRID (audio_grid), 8);
+  gtk_grid_set_column_spacing (GTK_GRID (audio_grid), 10);
+  gtk_box_pack_start (GTK_BOX (audio_page), audio_grid, FALSE, FALSE, 0);
+  make_slider_row (audio_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
   /* Tick mark showing where 100% ends and overamplification begins. */
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
-  qs->sink_combo = make_device_row (vol_grid, 1, "audio-speakers-symbolic",
+  qs->sink_combo = make_device_row (audio_grid, 1, "audio-speakers-symbolic",
                                     "Audio output device");
-  qs->source_combo = make_device_row (vol_grid, 2,
+  qs->source_combo = make_device_row (audio_grid, 2,
                                       "audio-input-microphone-symbolic",
                                       "Audio input device");
+  gtk_stack_add_named (GTK_STACK (stack), audio_page, "audio");
+  g_signal_connect (audio_back, "clicked",
+                    G_CALLBACK (on_audio_back_clicked), qs);
 
   g_signal_connect (qs->vol_scale, "value-changed",
                     G_CALLBACK (on_volume_changed), qs);
