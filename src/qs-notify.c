@@ -24,12 +24,19 @@ notice_free (gpointer data)
   g_free (n);
 }
 
+/* Path to the xfce4-notifyd history database (may not exist). */
+static gchar *
+notify_db_path (void)
+{
+  return g_build_filename (g_get_home_dir (), ".cache", "xfce4",
+                           "notifyd", "log.sqlite", NULL);
+}
+
 /* Newest first, or NULL when sqlite3/the log is missing. */
 static GList *
 list_notices (void)
 {
-  gchar  *path = g_build_filename (g_get_home_dir (), ".cache", "xfce4",
-                                   "notifyd", "log.sqlite", NULL);
+  gchar  *path = notify_db_path ();
   gchar  *quoted;
   gchar  *cmd;
   gchar  *output;
@@ -118,11 +125,27 @@ make_notice_row (Notice *n)
   gtk_label_set_markup (GTK_LABEL (title), markup);
   g_free (markup);
   g_free (esc);
-  gtk_widget_set_halign (title, GTK_ALIGN_START);
-  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
-  gtk_box_pack_start (GTK_BOX (vbox), title, FALSE, FALSE, 0);
+   gtk_widget_set_halign (title, GTK_ALIGN_START);
+   gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+   gtk_box_pack_start (GTK_BOX (vbox), title, FALSE, FALSE, 0);
 
-  time = notice_time (n->timestamp);
+   if (n->body != NULL && *n->body != '\0')
+     {
+       GtkWidget *body = gtk_label_new (NULL);
+
+       esc = g_markup_escape_text (n->body, -1);
+       markup = g_strdup_printf ("<small>%s</small>", esc);
+       gtk_label_set_markup (GTK_LABEL (body), markup);
+       g_free (markup);
+       g_free (esc);
+       gtk_widget_set_halign (body, GTK_ALIGN_START);
+       gtk_label_set_line_wrap (GTK_LABEL (body), TRUE);
+       gtk_label_set_lines (GTK_LABEL (body), 3);
+       gtk_label_set_ellipsize (GTK_LABEL (body), PANGO_ELLIPSIZE_END);
+       gtk_box_pack_start (GTK_BOX (vbox), body, FALSE, FALSE, 0);
+     }
+
+   time = notice_time (n->timestamp);
   sub_text = g_strdup_printf ("%s · %s", n->app, time);
   esc = g_markup_escape_text (sub_text, -1);
   markup = g_strdup_printf ("<small>%s</small>", esc);
@@ -135,8 +158,6 @@ make_notice_row (Notice *n)
   gtk_widget_set_halign (sub, GTK_ALIGN_START);
   gtk_box_pack_start (GTK_BOX (vbox), sub, FALSE, FALSE, 0);
 
-  if (n->body != NULL && *n->body != '\0')
-    gtk_widget_set_tooltip_text (row, n->body);
   gtk_container_add (GTK_CONTAINER (row), vbox);
   return row;
 }
@@ -160,7 +181,34 @@ notify_fill_list (QuickSettings *qs)
                              make_notice_row (l->data), -1);
       g_list_free_full (notices, notice_free);
     }
+  gtk_widget_set_sensitive (qs->notify_clear, notices != NULL);
   gtk_widget_show_all (qs->notify_list);
+}
+
+static void
+on_notify_clear_clicked (GtkButton *button,
+                         gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+  gchar *path = notify_db_path ();
+  gchar *quoted;
+  gchar *cmd;
+  gchar *output;
+
+  (void) button;
+  if (command_exists ("sqlite3")
+      && g_file_test (path, G_FILE_TEST_EXISTS))
+    {
+      quoted = g_shell_quote (path);
+      cmd = g_strdup_printf ("sqlite3 %s \"DELETE FROM notifications;\"",
+                             quoted);
+      g_free (quoted);
+      output = run_command (cmd);
+      g_free (cmd);
+      g_free (output);
+    }
+  g_free (path);
+  notify_fill_list (qs);
 }
 
 static void
@@ -209,6 +257,10 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   qs->notify_list = gtk_list_box_new ();
   gtk_container_add (GTK_CONTAINER (scroll), qs->notify_list);
   gtk_box_pack_start (GTK_BOX (page), scroll, TRUE, TRUE, 0);
+  qs->notify_clear = gtk_button_new_with_label ("Clear");
+  gtk_box_pack_start (GTK_BOX (page), qs->notify_clear, FALSE, FALSE, 0);
+  g_signal_connect (qs->notify_clear, "clicked",
+                    G_CALLBACK (on_notify_clear_clicked), qs);
   gtk_stack_add_named (GTK_STACK (stack), page, "notices");
   g_signal_connect (back, "clicked",
                     G_CALLBACK (on_notify_back_clicked), qs);

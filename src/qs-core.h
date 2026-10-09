@@ -36,6 +36,7 @@ typedef struct
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;
   GtkWidget       *notify_list;
+  GtkWidget       *notify_clear;
   GtkWidget       *sysmon_ram_bar;
   GtkWidget       *sysmon_cpu_bar;
   GtkWidget       *sysmon_disk_box;
