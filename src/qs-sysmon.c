@@ -369,7 +369,7 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   /* Full-width tile above the Notifications tile. */
   gtk_box_pack_start (GTK_BOX (box), sys_box, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (sys_box), sys_sep, FALSE, FALSE, 2);
-  sys_tile = make_tile (sys_box, "utilities-system-monitor-symbolic",
+  sys_tile = make_tile (sys_box, "computer-symbolic",
                          "System");
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);

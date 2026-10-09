@@ -113,9 +113,9 @@ session_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                      "Shut Down", "halt");
   make_power_button (action_box, "system-reboot-symbolic",
                      "Restart", "reboot");
-  make_power_button (action_box, "system-hibernate-symbolic",
+  make_power_button (action_box, "drive-harddisk-symbolic",
                      "Hibernate", "hibernate");
-  make_power_button (action_box, "system-suspend-symbolic",
+  make_power_button (action_box, "media-playback-pause-symbolic",
                      "Suspend", "suspend");
   make_power_button (action_box, "system-log-out-symbolic",
                      "Log Out", "logout");

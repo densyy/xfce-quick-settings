@@ -289,7 +289,7 @@ wifi_fill_list (QuickSettings *qs,
       gtk_box_pack_start (GTK_BOX (hbox), name, TRUE, TRUE, 0);
       if (net->active)
         {
-          GtkWidget *check = gtk_image_new_from_icon_name ("emblem-ok-symbolic",
+          GtkWidget *check = gtk_image_new_from_icon_name ("object-select-symbolic",
                                                            GTK_ICON_SIZE_MENU);
 
           gtk_box_pack_start (GTK_BOX (hbox), check, FALSE, FALSE, 0);
