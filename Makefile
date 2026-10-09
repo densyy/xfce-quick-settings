@@ -15,7 +15,7 @@ LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 l
 
 SRC = src/qs-plugin.c src/qs-util.c src/qs-ui.c src/qs-audio.c \
       src/qs-display.c src/qs-net.c src/qs-power.c src/qs-session.c \
-      src/qs-notify.c
+      src/qs-notify.c src/qs-sysmon.c
 OBJ = $(SRC:.c=.o)
 
 .PHONY: all clean install uninstall

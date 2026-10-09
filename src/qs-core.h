@@ -36,6 +36,13 @@ typedef struct
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;
   GtkWidget       *notify_list;
+  GtkWidget       *sysmon_ram_bar;
+  GtkWidget       *sysmon_cpu_bar;
+  GtkWidget       *sysmon_disk_box;
+  guint            sysmon_timer;
+  guint64          sysmon_prev_total;
+  guint64          sysmon_prev_idle;
+  gboolean         sysmon_have_prev;
   gboolean         wifi_on;  gboolean         bt_on; /* cached: live check may block without daemon */
   gchar           *bt_controller; /* owned MAC or NULL */
   gboolean         scanning_wifi;

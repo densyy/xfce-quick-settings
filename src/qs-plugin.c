@@ -6,6 +6,7 @@
 #include "qs-power.h"
 #include "qs-session.h"
 #include "qs-notify.h"
+#include "qs-sysmon.h"
 
 void
 qs_ref (QuickSettings *qs)
@@ -126,6 +127,7 @@ quick_settings_free (XfcePanelPlugin *plugin,
   (void) plugin;
 
   qs->dead = TRUE;
+  sysmon_stop (qs); /* drop the timer's implied ref before destroying */
   gtk_widget_destroy (qs->popup);
   qs_unref (qs);
 }
@@ -190,6 +192,8 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   power_build_section (box, qs);
 
   notify_build_section (box, qs->stack, qs);
+
+  sysmon_build_section (box, qs->stack, qs);
 
   session_build_section (box, qs->stack, qs);
 
