@@ -15,7 +15,9 @@ LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 l
 
 SRC = src/qs-plugin.c src/qs-util.c src/qs-ui.c src/qs-audio.c \
       src/qs-display.c src/qs-net.c src/qs-power.c src/qs-session.c \
-      src/qs-notify.c src/qs-sysmon.c
+      src/qs-notify.c src/qs-sysmon.c src/qs-popup.c src/qs-theme.c \
+      src/qs-core.c src/qs-brightness.c src/qs-nightlight.c \
+      src/qs-monitor.c src/qs-wifi.c src/qs-bluetooth.c
 OBJ = $(SRC:.c=.o)
 DEP = $(SRC:.c=.d)
 

@@ -4,13 +4,21 @@
 
 #define POWER_INTERVAL_S 30
 
-/* ---------------- battery backend (upower > sysfs) ---------------- */
+/* Battery backend (upower async > sysfs sync).
+ * upower ("upower -e" + "upower -i") roda via run_command_async (nunca
+ * spawn sync na UI); sysfs é só leitura de arquivo, sync e barato.
+ * Timer de 30s só existe com bateria presente (iniciado/parado nos
+ * callbacks async). Async guarda qs_ref + checa qs->dead no idle. */
 
-/* First "upower -e" line mentioning a battery, or NULL (caller frees). */
+#define POWER_DATA_LOADING "qs-power-loading"
+
+static gboolean power_tick (gpointer data);
+
+/* First "upower -e" line mentioning a battery, or NULL (caller frees).
+ * Puro (só parse): usado no callback async, sem spawn. */
 static gchar *
-upower_battery_path (void)
+power_parse_battery_path (const gchar *output)
 {
-  gchar  *output = run_command ("upower -e");
   gchar **lines;
   gchar  *path = NULL;
   gint    i;
@@ -28,34 +36,23 @@ upower_battery_path (void)
         }
     }
   g_strfreev (lines);
-  g_free (output);
   return path;
 }
 
+/* Parse de "upower -i" (puro, sem spawn). */
 static gboolean
-get_battery_upower (gint   *percent,
-                    gchar **state_out,
-                    gchar **time_out)
+power_parse_detail (const gchar *output,
+                    gint        *percent,
+                    gchar      **state_out,
+                    gchar      **time_out)
 {
-  gchar *path = upower_battery_path ();
-  gchar *quoted;
-  gchar *cmd;
-  gchar *output;
-  gchar **lines;
-  gchar  *state = NULL;
-  gchar  *perc = NULL;
-  gchar  *to_empty = NULL;
-  gchar  *to_full = NULL;
-  gint    i;
+  gchar  **lines;
+  gchar   *state = NULL;
+  gchar   *perc = NULL;
+  gchar   *to_empty = NULL;
+  gchar   *to_full = NULL;
+  gint     i;
 
-  if (path == NULL)
-    return FALSE;
-  quoted = g_shell_quote (path);
-  cmd = g_strdup_printf ("upower -i %s", quoted);
-  g_free (quoted);
-  g_free (path);
-  output = run_command (cmd);
-  g_free (cmd);
   if (output == NULL)
     return FALSE;
   lines = g_strsplit (output, "\n", -1);
@@ -88,7 +85,6 @@ get_battery_upower (gint   *percent,
         }
     }
   g_strfreev (lines);
-  g_free (output);
   *percent = parse_first_percent (perc);
   g_free (perc);
   if (*percent < 0)
@@ -99,7 +95,6 @@ get_battery_upower (gint   *percent,
       return FALSE;
     }
   *state_out = state;
-  /* Time remaining depends on the direction. */
   if (state != NULL && g_ascii_strcasecmp (state, "charging") == 0)
     {
       *time_out = to_full;
@@ -191,36 +186,29 @@ battery_icon_for_level (gint     percent,
   return "battery-full-symbolic";
 }
 
-/* Refresh icon + label; hides the whole section when no battery exists. */
-void
-power_refresh (QuickSettings *qs)
+static void
+power_show_none (QuickSettings *qs)
 {
-  gint      percent = -1;
-  gchar    *state = NULL;
-  gchar    *time = NULL;
-  gboolean  ok;
+  gtk_widget_show_all (qs->bat_box);
+  gtk_image_set_from_icon_name (GTK_IMAGE (qs->bat_icon),
+                                "battery-missing-symbolic",
+                                GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_label_set_text (GTK_LABEL (qs->bat_label), "—");
+  gtk_label_set_text (GTK_LABEL (qs->bat_status),
+                      "No battery detected");
+  gtk_widget_set_sensitive (qs->bat_box, FALSE);
+}
+
+static void
+power_show_value (QuickSettings *qs,
+                  gint           percent,
+                  const gchar   *state,
+                  const gchar   *time)
+{
   gboolean  charging;
   gchar    *label;
   gchar    *tip;
 
-  if (command_exists ("upower"))
-    ok = get_battery_upower (&percent, &state, &time);
-  else
-    ok = get_battery_sysfs (&percent, &state, &time);
-  if (!ok || percent < 0)
-    {
-      gtk_widget_show_all (qs->bat_box);
-      gtk_image_set_from_icon_name (GTK_IMAGE (qs->bat_icon),
-                                    "battery-missing-symbolic",
-                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
-      gtk_label_set_text (GTK_LABEL (qs->bat_label), "—");
-      gtk_label_set_text (GTK_LABEL (qs->bat_status),
-                          "No battery detected");
-      gtk_widget_set_sensitive (qs->bat_box, FALSE);
-      g_free (state);
-      g_free (time);
-      return;
-    }
   percent = CLAMP (percent, 0, 100);
   charging = (state != NULL && g_ascii_strcasecmp (state, "charging") == 0);
   gtk_widget_show_all (qs->bat_box);
@@ -253,11 +241,137 @@ power_refresh (QuickSettings *qs)
     }
   gtk_label_set_text (GTK_LABEL (qs->bat_status), label);
   g_free (label);
-  g_free (state);
-  g_free (time);
 }
 
-/* ---------------- section: build ---------------- */
+static void
+power_maybe_start_timer (QuickSettings *qs)
+{
+  if (!qs->dead && gtk_widget_get_sensitive (qs->bat_box)
+      && qs->power_timer == 0)
+    qs->power_timer = g_timeout_add_seconds (POWER_INTERVAL_S,
+                                             power_tick, qs);
+}
+
+static void
+power_upower_detail_done (const gchar *output,
+                          const gchar *errout,
+                          gboolean     ok,
+                          gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+  gint           percent = -1;
+  gchar         *state = NULL;
+  gchar         *time = NULL;
+
+  (void) errout;
+  if (qs->dead)
+    {
+      qs_unref (qs);
+      return;
+    }
+  if (qs->popup != NULL)
+    g_object_set_data (G_OBJECT (qs->popup), POWER_DATA_LOADING, NULL);
+  if (ok && power_parse_detail (output, &percent, &state, &time)
+      && percent >= 0)
+    {
+      power_show_value (qs, percent, state, time);
+      power_maybe_start_timer (qs);
+    }
+  else
+    {
+      /* Sem bateria/detalhe: visível mas desabilitado, sem polling. */
+      power_show_none (qs);
+      power_stop (qs);
+    }
+  g_free (state);
+  g_free (time);
+  qs_unref (qs);
+}
+
+static void
+power_upower_list_done (const gchar *output,
+                        const gchar *errout,
+                        gboolean     ok,
+                        gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+  gchar         *path;
+
+  (void) errout;
+  if (qs->dead)
+    {
+      qs_unref (qs);
+      return;
+    }
+  if (!ok)
+    {
+      if (qs->popup != NULL)
+        g_object_set_data (G_OBJECT (qs->popup), POWER_DATA_LOADING, NULL);
+      power_show_none (qs);
+      power_stop (qs);
+      qs_unref (qs);
+      return;
+    }
+  path = power_parse_battery_path (output);
+  if (path == NULL)
+    {
+      if (qs->popup != NULL)
+        g_object_set_data (G_OBJECT (qs->popup), POWER_DATA_LOADING, NULL);
+      power_show_none (qs);
+      power_stop (qs);
+      qs_unref (qs);
+      return;
+    }
+  /* Segunda etapa encadeada com o mesmo guard: loading segue ligado
+   * até o detail_done; transfere a ref (nova ref p/ o 2º async). */
+  {
+    gchar *quoted = g_shell_quote (path);
+    gchar *cmd = g_strdup_printf ("upower -i %s", quoted);
+
+    g_free (quoted);
+    g_free (path);
+    qs_ref (qs);
+    run_command_async (cmd, power_upower_detail_done, qs);
+    g_free (cmd);
+  }
+  qs_unref (qs);
+}
+
+/* Refresh icon + label; upower via async (sem spawn na UI), sysfs sync
+ * (só arquivo, barato). Timer só com bateria (ver callbacks). */
+void
+power_refresh (QuickSettings *qs)
+{
+  gint      percent = -1;
+  gchar    *state = NULL;
+  gchar    *time = NULL;
+  gboolean  ok;
+
+  if (!command_exists ("upower"))
+    {
+      ok = get_battery_sysfs (&percent, &state, &time);
+      if (!ok || percent < 0)
+        {
+          power_show_none (qs);
+          g_free (state);
+          g_free (time);
+          return;
+        }
+      power_show_value (qs, percent, state, time);
+      g_free (state);
+      g_free (time);
+      return;
+    }
+  if (qs->popup != NULL
+      && g_object_get_data (G_OBJECT (qs->popup),
+                            POWER_DATA_LOADING) != NULL)
+    return;
+  if (qs->popup != NULL)
+    g_object_set_data (G_OBJECT (qs->popup), POWER_DATA_LOADING,
+                       GUINT_TO_POINTER (1));
+  qs_ref (qs);
+  run_command_async ("upower -e", power_upower_list_done, qs);
+}
 
 static gboolean
 power_tick (gpointer data)
@@ -269,13 +383,8 @@ power_tick (gpointer data)
       qs->power_timer = 0;
       return G_SOURCE_REMOVE;
     }
+  /* Async: o callback para o timer se a bateria sumir. Aqui só rearma. */
   power_refresh (qs);
-  /* No battery: keep the section visible but disabled, without polling. */
-  if (!gtk_widget_get_sensitive (qs->bat_box))
-    {
-      qs->power_timer = 0;
-      return G_SOURCE_REMOVE;
-    }
   return G_SOURCE_CONTINUE;
 }
 
@@ -292,10 +401,15 @@ power_stop (QuickSettings *qs)
 void
 power_start (QuickSettings *qs)
 {
+  /* upower é async: o timer nasce no callback só com bateria presente.
+   * sysfs é sync: decide já. */
+  if (!command_exists ("upower"))
+    {
+      power_refresh (qs);
+      power_maybe_start_timer (qs);
+      return;
+    }
   power_refresh (qs);
-  if (gtk_widget_get_sensitive (qs->bat_box) && qs->power_timer == 0)
-    qs->power_timer = g_timeout_add_seconds (POWER_INTERVAL_S,
-                                             power_tick, qs);
 }
 
 static void
@@ -319,8 +433,6 @@ power_build_section (GtkWidget *box, QuickSettings *qs)
   gtk_widget_set_halign (bat_header, GTK_ALIGN_START);
   gtk_box_pack_start (GTK_BOX (box), bat_header, FALSE, FALSE, 0);
 
-  /* Highlight card: big percentage + status line. Hidden when
-   * power_refresh finds no battery. */
   qs->bat_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   gtk_box_pack_start (GTK_BOX (box), qs->bat_box, FALSE, FALSE, 0);
   bat_card = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);

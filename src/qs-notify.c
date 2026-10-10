@@ -2,6 +2,7 @@
 #include "qs-ui.h"
 
 #include <sqlite3.h>
+#include <sys/stat.h>
 
 #define NOTIFY_MAX_ROWS 30
 /* Live refresh: dir monitor (sqlite uses rename/journal, so the file
@@ -12,7 +13,79 @@
 #define NOTIFY_DATA_POLL "qs-notify-poll"
 #define NOTIFY_DATA_DEB "qs-notify-debounce"
 
-/* One row from the xfce4-notifyd log. */
+/* ---- cache estático interno: evita COUNT(*)/rebuild sem mudança ----
+ * Tile usa stat(mtime+size) como fast-path: sem sqlite quando o arquivo
+ * não mudou. Lista só reconstrói 30 rows quando count/max(timestamp)
+ * diverge do último fill. Poll só com a página "notices" visível
+ * (start/stop no visible-child + show/hide). */
+static gint notify_cached_count = -1;
+static gint64 notify_cached_max = -1;
+static time_t notify_cached_mtime = 0;
+static off_t notify_cached_size = 0;
+static gboolean notify_cache_ready = FALSE;
+static gint notify_list_count = -1;
+static gint64 notify_list_max = -1;
+
+static gchar *notify_db_path (void);
+
+/* COUNT + MAX(timestamp) em 1 query (tile rápido, sem parse de 30 rows). */
+static gboolean
+notify_db_signature (gint   *count_out,
+                     gint64 *max_out)
+{
+  gchar       *path = notify_db_path ();
+  sqlite3     *db = NULL;
+  sqlite3_stmt *stmt = NULL;
+  gboolean     ok = FALSE;
+
+  if (!g_file_test (path, G_FILE_TEST_EXISTS))
+    {
+      g_free (path);
+      return FALSE;
+    }
+  if (sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
+    {
+      g_free (path);
+      if (db != NULL)
+        sqlite3_close (db);
+      return FALSE;
+    }
+  sqlite3_busy_timeout (db, 1000);
+  g_free (path);
+  if (sqlite3_prepare_v2 (db,
+                          "SELECT COUNT(*), MAX(timestamp) FROM notifications;",
+                          -1, &stmt, NULL) == SQLITE_OK
+      && sqlite3_step (stmt) == SQLITE_ROW)
+    {
+      if (count_out != NULL)
+        *count_out = sqlite3_column_int (stmt, 0);
+      if (max_out != NULL)
+        max_out[0] = sqlite3_column_type (stmt, 1) == SQLITE_NULL
+                     ? 0 : sqlite3_column_int64 (stmt, 1);
+      ok = TRUE;
+    }
+  if (stmt != NULL)
+    sqlite3_finalize (stmt);
+  if (db != NULL)
+    sqlite3_close (db);
+  return ok;
+}
+
+static void
+notify_set_tile_count (QuickSettings *qs,
+                       gint           count)
+{
+  if (count <= 0)
+    gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
+  else
+    {
+      gchar *text = g_strdup_printf ("%d", count);
+
+      gtk_label_set_text (GTK_LABEL (qs->notify_sub), text);
+      g_free (text);
+    }
+}
+
 typedef struct
 {
   gchar *app;
@@ -42,7 +115,7 @@ notify_db_path (void)
 }
 
 /* Flattens newlines: the list splits rows on '\n', so embedded
- * newlines would corrupt parsing (fixed via SQL before, now in C). */
+ * newlines would corrupt parsing. */
 static gchar *
 flat_text (const unsigned char *src)
 {
@@ -57,8 +130,7 @@ flat_text (const unsigned char *src)
 
 /* Newest first, or NULL when the log is missing/unreadable.
  * Reads via libsqlite3 directly: no sqlite3 CLI dependency and no
- * separator-quoting fragility ('\x1f' via CLI never matched the C
- * split, so the list was always empty). */
+ * separator-quoting fragility. */
 static GList *
 list_notices (void)
 {
@@ -277,6 +349,7 @@ notify_fill_list (QuickSettings *qs)
   GList *notices = list_notices ();
   GList *l;
   guint  count = 0;
+  gint64 max_ts = 0;
 
   clear_list_box (qs->notify_list);
   if (notices == NULL)
@@ -288,61 +361,163 @@ notify_fill_list (QuickSettings *qs)
     {
       for (l = notices; l != NULL; l = l->next)
         {
+          Notice *n = l->data;
+
+          if (count == 0)
+            max_ts = n->timestamp;
+          else if (n->timestamp > max_ts)
+            max_ts = n->timestamp;
           gtk_list_box_insert (GTK_LIST_BOX (qs->notify_list),
-                               make_notice_row (l->data), -1);
+                               make_notice_row (n), -1);
           count++;
         }
       g_list_free_full (notices, notice_free);
     }
-  if (count == 0)
-    gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
-  else
-    {
-      gchar *text = g_strdup_printf ("%u", count);
-
-      gtk_label_set_text (GTK_LABEL (qs->notify_sub), text);
-      g_free (text);
-    }
+  notify_set_tile_count (qs, (gint) count);
   gtk_widget_set_sensitive (qs->notify_clear, count > 0);
   gtk_widget_show_all (qs->notify_list);
+  notify_cached_count = (gint) count;
+  notify_cached_max = max_ts;
+  notify_cache_ready = TRUE;
+  notify_list_count = (gint) count;
+  notify_list_max = max_ts;
+  {
+    gchar *path = notify_db_path ();
+    struct stat st;
+
+    if (stat (path, &st) == 0)
+      {
+        notify_cached_mtime = st.st_mtime;
+        notify_cached_size = st.st_size;
+      }
+    g_free (path);
+  }
 }
 
-/* Lightweight count for the main-page tile (no row parsing). */
+/* Reconstrói 30 rows só se count/max(timestamp) mudou desde o último
+ * fill. Fast-path via stat: sem sqlite quando mtime+size iguais e a
+ * lista já está sincronizada. */
+static void
+notify_fill_list_if_changed (QuickSettings *qs)
+{
+  gchar      *path = notify_db_path ();
+  struct stat st;
+  gboolean    have_stat = (stat (path, &st) == 0);
+  gboolean    stat_same;
+
+  g_free (path);
+  stat_same = (notify_cache_ready && have_stat
+               && st.st_mtime == notify_cached_mtime
+               && st.st_size == notify_cached_size);
+  if (stat_same && notify_list_count == notify_cached_count
+      && notify_list_max == notify_cached_max)
+    return;
+  if (stat_same)
+    {
+      /* DB igual ao cache mas lista dessincronizada (ex.: tile atualizou
+       * na main e a lista ainda não): precisa rebuild mesmo sem sqlite. */
+      if (notify_list_count == notify_cached_count
+          && notify_list_max == notify_cached_max)
+        return;
+      notify_fill_list (qs);
+      return;
+    }
+  {
+    gint   count = -1;
+    gint64 max_ts = 0;
+
+    if (!notify_db_signature (&count, &max_ts))
+      {
+        /* DB sumiu/ilegível: mostra vazio e invalida só o necessário. */
+        if (notify_list_count != 0 || notify_list_max != 0)
+          notify_fill_list (qs);
+        else
+          notify_set_tile_count (qs, 0);
+        notify_cached_count = 0;
+        notify_cached_max = 0;
+        notify_cache_ready = TRUE;
+        if (have_stat)
+          {
+            notify_cached_mtime = st.st_mtime;
+            notify_cached_size = st.st_size;
+          }
+        return;
+      }
+    if (count == notify_list_count && max_ts == notify_list_max)
+      {
+        /* Só atualiza tile/stat, sem reconstruir 30 rows. */
+        notify_cached_count = count;
+        notify_cached_max = max_ts;
+        notify_cache_ready = TRUE;
+        if (have_stat)
+          {
+            notify_cached_mtime = st.st_mtime;
+            notify_cached_size = st.st_size;
+          }
+        notify_set_tile_count (qs, count);
+        return;
+      }
+    notify_cached_count = count;
+    notify_cached_max = max_ts;
+    notify_cache_ready = TRUE;
+    if (have_stat)
+      {
+        notify_cached_mtime = st.st_mtime;
+        notify_cached_size = st.st_size;
+      }
+    notify_fill_list (qs);
+  }
+}
+
+/* Tile leve: stat fast-path (sem sqlite) quando mtime+size iguais;
+ * senão 1 query COUNT+MAX (sem parse de 30 rows). */
 void
 notify_update_tile (QuickSettings *qs)
 {
-  gchar  *path = notify_db_path ();
-  sqlite3 *db = NULL;
-  sqlite3_stmt *stmt = NULL;
-  gint    count = -1;
+  gchar      *path = notify_db_path ();
+  struct stat st;
+  gboolean    have_stat = (stat (path, &st) == 0);
 
-  if (g_file_test (path, G_FILE_TEST_EXISTS)
-      && sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK)
+  if (notify_cache_ready && have_stat
+      && st.st_mtime == notify_cached_mtime
+      && st.st_size == notify_cached_size)
     {
-      sqlite3_busy_timeout (db, 1000);
-      if (sqlite3_prepare_v2 (db, "SELECT COUNT(*) FROM notifications;",
-                              -1, &stmt, NULL) == SQLITE_OK
-          && sqlite3_step (stmt) == SQLITE_ROW)
-        count = sqlite3_column_int (stmt, 0);
+      g_free (path);
+      notify_set_tile_count (qs, notify_cached_count);
+      return;
     }
-  if (stmt != NULL)
-    sqlite3_finalize (stmt);
-  if (db != NULL)
-    sqlite3_close (db);
   g_free (path);
-  if (count <= 0)
-    gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
-  else
-    {
-      gchar *text = g_strdup_printf ("%d", count);
+  {
+    gint   count = -1;
+    gint64 max_ts = 0;
 
-      gtk_label_set_text (GTK_LABEL (qs->notify_sub), text);
-      g_free (text);
-    }
+    if (!notify_db_signature (&count, &max_ts))
+      {
+        notify_cached_count = 0;
+        notify_cached_max = 0;
+        notify_cache_ready = TRUE;
+        if (have_stat)
+          {
+            notify_cached_mtime = st.st_mtime;
+            notify_cached_size = st.st_size;
+          }
+        notify_set_tile_count (qs, 0);
+        return;
+      }
+    notify_cached_count = count;
+    notify_cached_max = max_ts;
+    notify_cache_ready = TRUE;
+    if (have_stat)
+      {
+        notify_cached_mtime = st.st_mtime;
+        notify_cached_size = st.st_size;
+      }
+    notify_set_tile_count (qs, count);
+  }
 }
 
-/* Refreshes tile always, list only when the "notices" page is showing.
- * No-ops while the popup is hidden or the plugin is dead. */
+/* Refreshes tile always, list only when the "notices" page is showing
+ * e só se count/timestamp mudou. No-ops while hidden/dead. */
 static void
 notify_refresh_visible (QuickSettings *qs)
 {
@@ -353,7 +528,7 @@ notify_refresh_visible (QuickSettings *qs)
   notify_update_tile (qs);
   name = gtk_stack_get_visible_child_name (GTK_STACK (qs->stack));
   if (g_strcmp0 (name, "notices") == 0)
-    notify_fill_list (qs);
+    notify_fill_list_if_changed (qs);
 }
 
 static gboolean
@@ -412,14 +587,22 @@ on_notify_dir_changed (GFileMonitor      *monitor,
   notify_schedule_refresh (qs);
 }
 
-/* Poll fallback: only ever runs while the popup is visible (started on
- * "show", stopped on "hide"); self-removes as a backup. */
+/* Poll fallback: só roda com a página "notices" visível (e popup
+ * visível); auto-remove ao sair da página/ocultar (backup). */
 static gboolean
 notify_poll_tick (gpointer data)
 {
   QuickSettings *qs = data;
+  const gchar   *name;
 
   if (qs->dead || !gtk_widget_get_visible (qs->popup))
+    {
+      g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
+                         GUINT_TO_POINTER (0));
+      return G_SOURCE_REMOVE;
+    }
+  name = gtk_stack_get_visible_child_name (GTK_STACK (qs->stack));
+  if (g_strcmp0 (name, "notices") != 0)
     {
       g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
                          GUINT_TO_POINTER (0));
@@ -432,10 +615,16 @@ notify_poll_tick (gpointer data)
 static void
 notify_poll_start (QuickSettings *qs)
 {
-  guint id;
+  guint        id;
+  const gchar *name;
 
   if (qs->dead
       || g_object_get_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL) != NULL)
+    return;
+  if (!gtk_widget_get_visible (qs->popup))
+    return;
+  name = gtk_stack_get_visible_child_name (GTK_STACK (qs->stack));
+  if (g_strcmp0 (name, "notices") != 0)
     return;
   id = g_timeout_add_seconds (NOTIFY_POLL_S, notify_poll_tick, qs);
   g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
@@ -466,7 +655,12 @@ on_notify_stack_child (GObject    *stack,
   (void) pspec;
   name = gtk_stack_get_visible_child_name (GTK_STACK (stack));
   if (g_strcmp0 (name, "notices") == 0 && !qs->dead)
-    notify_fill_list (qs);
+    {
+      notify_fill_list_if_changed (qs);
+      notify_poll_start (qs);
+    }
+  else
+    notify_poll_stop (qs);
 }
 
 static void
@@ -528,7 +722,11 @@ on_notify_clear_clicked (GtkButton *button,
         sqlite3_close (db);
     }
   g_free (path);
-  notify_fill_list (qs);
+  /* DELETE muda mtime: invalida fast-path e reconstrói (vira "Empty"). */
+  notify_cached_mtime = 0;
+  notify_cached_size = 0;
+  notify_cache_ready = FALSE;
+  notify_fill_list_if_changed (qs);
 }
 
 static void
@@ -538,7 +736,7 @@ on_notify_tile_clicked (GtkButton *button,
   QuickSettings *qs = user_data;
 
   (void) button;
-  notify_fill_list (qs);
+  notify_fill_list_if_changed (qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "notices");
 }
 
@@ -564,14 +762,12 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   GFile *mon_file;
   GFileMonitor *mon;
 
-  /* Mini tile in the shared action grid. */
   notify_tile = make_mini_tile (box, "preferences-system-notifications-symbolic",
                                 "Notifications", &qs->notify_sub);
   gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
   g_signal_connect (notify_tile, "clicked",
                     G_CALLBACK (on_notify_tile_clicked), qs);
 
-  /* Sub-page with the scrollable history. */
   page = make_sub_page ("Notifications", &back);
   scroll = gtk_scrolled_window_new (NULL, NULL);
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll),
@@ -592,11 +788,11 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (back, "clicked",
                     G_CALLBACK (on_notify_back_clicked), qs);
   /* Refill whenever the history page becomes visible (covers entering
-   * it from anywhere, not just the tile click above). */
+   * it from anywhere, not just the tile click above). Poll só aqui. */
   g_signal_connect (stack, "notify::visible-child-name",
                     G_CALLBACK (on_notify_stack_child), qs);
-  /* Poll fallback runs only while the popup is open (same hide signal
-   * that stops power/sysmon); monitor below covers the live part. */
+  /* Poll fallback só com "notices" visível (show checa a página; hide
+   * para como power/sysmon); monitor cobre o tempo real do tile. */
   g_signal_connect (qs->popup, "show",
                     G_CALLBACK (on_notify_popup_show), qs);
   g_signal_connect (qs->popup, "hide",

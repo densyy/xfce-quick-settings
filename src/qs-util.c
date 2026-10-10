@@ -54,7 +54,8 @@ qs_async_idle (gpointer data)
 {
   QsAsync *a = data;
 
-  a->done (a->output, a->errout, a->ok, a->user_data);
+  if (a->done != NULL)
+    a->done (a->output, a->errout, a->ok, a->user_data);
   g_free (a->cmdline);
   g_free (a->output);
   g_free (a->errout);
@@ -81,12 +82,95 @@ run_command_async (const gchar *cmdline,
                    QsCmdDone    done,
                    gpointer     user_data)
 {
-  QsAsync *a = g_new0 (QsAsync, 1);
+  QsAsync *a;
+  GThread *thread;
 
+  if (cmdline == NULL || done == NULL)
+    return;
+
+  a = g_new0 (QsAsync, 1);
   a->cmdline = g_strdup (cmdline);
   a->done = done;
   a->user_data = user_data;
-  g_thread_unref (g_thread_new ("qs-cmd", qs_async_thread, a));
+  thread = g_thread_new ("qs-cmd", qs_async_thread, a);
+  if (thread == NULL)
+    {
+      g_free (a->cmdline);
+      g_free (a);
+      return;
+    }
+  g_thread_unref (thread);
+}
+
+/* qs-aware variant: the ref keeps qs alive across the worker thread, so
+ * done() never runs with a freed QuickSettings. done() is skipped when
+ * qs died meanwhile (free-data ran); the ref is always dropped here, so
+ * done() must NOT call qs_unref for this helper (unlike the manual
+ * qs_ref/qs_unref pattern used with run_command_async). */
+typedef struct
+{
+  gchar         *cmdline;
+  QsCmdDone      done;
+  QuickSettings *qs;
+  gchar         *output;
+  gchar         *errout;
+  gboolean       ok;
+} QsAsyncQs;
+
+static gboolean
+qs_async_qs_idle (gpointer data)
+{
+  QsAsyncQs *a = data;
+
+  if (!a->qs->dead && a->done != NULL)
+    a->done (a->output, a->errout, a->ok, a->qs);
+  qs_unref (a->qs);
+  g_free (a->cmdline);
+  g_free (a->output);
+  g_free (a->errout);
+  g_free (a);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+qs_async_qs_thread (gpointer data)
+{
+  QsAsyncQs *a = data;
+  GError    *error = NULL;
+
+  a->ok = g_spawn_command_line_sync (a->cmdline, &a->output, &a->errout,
+                                     NULL, &error);
+  if (error != NULL)
+    g_clear_error (&error);
+  g_idle_add (qs_async_qs_idle, a);
+  return NULL;
+}
+
+void
+run_command_async_qs (const gchar   *cmdline,
+                      QsCmdDone      done,
+                      QuickSettings *qs)
+{
+  QsAsyncQs *a;
+  GThread   *thread;
+
+  if (cmdline == NULL || done == NULL || qs == NULL)
+    return;
+
+  qs_ref (qs);
+  a = g_new0 (QsAsyncQs, 1);
+  a->cmdline = g_strdup (cmdline);
+  a->done = done;
+  a->qs = qs;
+  thread = g_thread_new ("qs-cmd", qs_async_qs_thread, a);
+  if (thread == NULL)
+    {
+      qs_unref (qs);
+      g_free (a->cmdline);
+      g_free (a);
+      return;
+    }
+  g_thread_unref (thread);
 }
 
 /* Split an nmcli terse line on unescaped ':' (handles \: and \\). */

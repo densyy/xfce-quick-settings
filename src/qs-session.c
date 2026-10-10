@@ -99,12 +99,10 @@ session_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   GtkWidget *action_box;
   GtkWidget *power_back;
 
-  /* Mini tile in the shared action grid. */
   power_tile = make_mini_tile (box, "system-shutdown-symbolic", "Power", NULL);
   g_signal_connect (power_tile, "clicked",
                     G_CALLBACK (on_power_tile_clicked), qs);
 
-  /* Sub-page with the session actions. */
   power_page = make_sub_page ("Power", &power_back);
   action_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_INNER_GAP);
   gtk_box_set_homogeneous (GTK_BOX (action_box), TRUE);

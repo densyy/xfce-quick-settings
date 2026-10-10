@@ -13,6 +13,32 @@ static const gchar *skip_fs[] = {
   "fusectl", "mqueue", "hugetlbfs", "nsfs", "overlay", "squashfs", NULL
 };
 
+/* Remote/files de rede: statvfs pode travar na UI (servidor fora).
+ * Nunca exibidos; pulados antes de qualquer statvfs. */
+static gboolean
+fs_is_network (const gchar *fstype,
+               const gchar *device)
+{
+  if (fstype == NULL)
+    return FALSE;
+  if (g_str_has_prefix (fstype, "nfs"))
+    return TRUE;
+  if (g_strcmp0 (fstype, "cifs") == 0
+      || g_str_has_prefix (fstype, "smb"))
+    return TRUE;
+  if (g_strcmp0 (fstype, "sshfs") == 0
+      || g_str_has_prefix (fstype, "fuse.sshfs"))
+    return TRUE;
+  if (device != NULL)
+    {
+      if (g_str_has_prefix (device, "//"))
+        return TRUE;
+      if (strstr (device, ":/") != NULL)
+        return TRUE;
+    }
+  return FALSE;
+}
+
 static gboolean
 fs_skipped (const gchar *fstype,
             const gchar *device)
@@ -22,12 +48,18 @@ fs_skipped (const gchar *fstype,
   for (i = 0; skip_fs[i] != NULL; i++)
     if (g_strcmp0 (fstype, skip_fs[i]) == 0)
       return TRUE;
-  if (g_str_has_prefix (device, "/dev/loop"))
+  if (device != NULL && g_str_has_prefix (device, "/dev/loop"))
     return TRUE;
-  if (g_str_has_prefix (fstype, "fuse.") && g_strcmp0 (fstype, "fuseblk") != 0)
+  if (fstype != NULL && g_str_has_prefix (fstype, "fuse.")
+      && g_strcmp0 (fstype, "fuseblk") != 0)
+    return TRUE;
+  if (fs_is_network (fstype, device))
     return TRUE;
   return FALSE;
 }
+
+/* DATA (sem widgets): read_memory/read_cpu/read_disks + helpers puros.
+ * Nenhum GTK aqui. */
 
 gboolean
 sysmon_read_memory (guint64 *total_kb,
@@ -127,7 +159,6 @@ sysmon_read_cpu (QuickSettings *qs)
   return CLAMP (percent, 0.0, 100.0);
 }
 
-/* Compact "used/total" for row headers; the percent lives on the bar. */
 gchar *
 sysmon_bytes_text (guint64 bytes,
                    guint64 total)
@@ -254,6 +285,61 @@ sysmon_read_disks (void)
   return disks;
 }
 
+/* Chave "nome|" dos devices em /proc/mounts SEM statvfs (só parse,
+ * barato e sem travar em FS remoto). Hash de montagens: quando igual ao
+ * qs->sysmon_disk_key, pula statvfs por disco na UI. */
+static gchar *
+sysmon_mounts_key (void)
+{
+  gchar      *content = NULL;
+  GString    *key;
+  GHashTable *seen;
+  gchar     **lines;
+  gint        i;
+
+  if (!g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
+    return NULL;
+  key = g_string_new (NULL);
+  seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  lines = g_strsplit (content, "\n", -1);
+  g_free (content);
+  for (i = 0; lines[i] != NULL; i++)
+    {
+      gchar **parts = g_strsplit (lines[i], " ", 4);
+      gchar  *device;
+      const gchar *base;
+
+      if (g_strv_length (parts) < 3)
+        {
+          g_strfreev (parts);
+          continue;
+        }
+      device = unescape_mount (parts[0]);
+      if (fs_skipped (parts[2], device)
+          || g_hash_table_contains (seen, device))
+        {
+          g_free (device);
+          g_strfreev (parts);
+          continue;
+        }
+      g_hash_table_add (seen, g_strdup (device));
+      base = device;
+      if (g_str_has_prefix (device, "/dev/"))
+        base += strlen ("/dev/");
+      g_string_append (key, base);
+      g_string_append_c (key, '|');
+      g_free (device);
+      g_strfreev (parts);
+    }
+  g_strfreev (lines);
+  g_hash_table_destroy (seen);
+  return g_string_free (key, FALSE);
+}
+
+/* VIEW (cards/refresh/tick): abaixo só GTK.
+ * DATA (acima) nunca toca em widget; VIEW nunca faz parse/stat direto
+ * (usa read_* e o mounts_key para pular statvfs). */
+
 /* Resource row: header (title + compact value) over a bar row
  * [expandable bar + % label at right]. The % lives in its own label
  * (the bar never shows overlay text). Value/bar/pct widgets are
@@ -309,7 +395,6 @@ make_sys_card (GtkWidget   *box,
   return card;
 }
 
-/* Sets bar fraction + right-side % label from a 0-1 fraction. */
 static void
 sysmon_set_bar (GtkWidget *bar,
                 GtkWidget *pct,
@@ -323,7 +408,6 @@ sysmon_set_bar (GtkWidget *bar,
   g_free (text);
 }
 
-/* Horizontal <hr> between rows (never before first / after last). */
 static void
 sysmon_add_separator (GtkWidget *box)
 {
@@ -335,7 +419,6 @@ sysmon_add_separator (GtkWidget *box)
   gtk_box_pack_start (GTK_BOX (box), sep, FALSE, FALSE, 0);
 }
 
-/* Distinct (physical id, core id) keys for qsort-style dedup. */
 static gint
 cpu_pair_compare (gconstpointer a,
                   gconstpointer b)
@@ -467,14 +550,28 @@ sysmon_refresh (QuickSettings *qs)
       sysmon_set_bar (qs->sysmon_cpu_bar, qs->sysmon_cpu_pct, cpu / 100.0);
     }
 
-  /* Disks: rebuild the blocks only when the device set changed,
-   * otherwise update the values in place. Separators are children of
-   * the same box, so the in-place path skips non-row children and the
-   * rebuild path recreates exactly N-1 separators (clear wipes them). */
+  /* Disks: statvfs (bloqueante, pula rede) só quando /proc/mounts mudou
+   * (hash mounts_key vs disk_key reaproveitado). Montagens iguais =>
+   * mantém barras atuais, sem statvfs na UI. RAM/CPU sempre atualizam
+   * (só /proc, barato). Tradeoff: uso de disco congela até (re)montar;
+   * evita stalls em FS remoto/stale a cada tick de 10s. */
   {
-    GPtrArray *disks = sysmon_read_disks ();
-    GString   *key = g_string_new (NULL);
-    guint      i;
+    gchar *mounts_key = sysmon_mounts_key ();
+
+    if (mounts_key != NULL && qs->sysmon_disk_key != NULL
+        && g_strcmp0 (mounts_key, qs->sysmon_disk_key) == 0)
+      {
+        g_free (mounts_key);
+      }
+    else
+      {
+        GPtrArray *disks;
+        GString   *key;
+        guint      i;
+
+        g_free (mounts_key);
+        disks = sysmon_read_disks ();
+        key = g_string_new (NULL);
 
     for (i = 0; i < disks->len; i++)
       {
@@ -552,6 +649,7 @@ sysmon_refresh (QuickSettings *qs)
         gtk_widget_show_all (qs->sysmon_disk_box);
       }
     sysmon_free_disks (disks);
+      }
   }
 }
 
@@ -620,15 +718,10 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   GtkWidget *disks_grid;
   GtkWidget *back;
 
-  /* Mini tile in the shared action grid. */
   sys_tile = make_mini_tile (box, "computer-symbolic", "System", NULL);
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);
 
-  /* One row per resource: header (title + compact value) + bar row
-   * [bar + % label]. Memory/CPU rows are fixed; disks get one row
-   * each under Disks. Separators sit between rows only (never before
-   * the first nor after the last). */
   page = make_sub_page ("System", &back);
   make_sys_card (page, "Memory",
                  &qs->sysmon_ram_value, &qs->sysmon_ram_bar,

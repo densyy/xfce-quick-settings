@@ -77,7 +77,7 @@ typedef struct
   gboolean         dead; /* TRUE after free-data: don't touch widgets */
 } QuickSettings;
 
-/* Reference counting for async callbacks (defined in qs-plugin.c). */
+/* Reference counting for async callbacks (defined in qs-core.c). */
 void qs_ref (QuickSettings *qs);
 void qs_unref (QuickSettings *qs);
 

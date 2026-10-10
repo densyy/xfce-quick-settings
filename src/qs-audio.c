@@ -2,7 +2,6 @@
 #include "qs-ui.h"
 #include "qs-util.h"
 
-/* One audio device: combo id + visible label + default flag. */
 static void
 audio_dev_free (gpointer data)
 {
@@ -13,43 +12,91 @@ audio_dev_free (gpointer data)
   g_free (dev);
 }
 
-/* ---------------- volume backend: pactl > wpctl > amixer ---------------- */
+/* Volume backend: pactl > wpctl > amixer.
+ * Backend detectado 1x e cacheado (nenhum command_exists/spawn na UI
+ * depois da primeira chamada). Leitura roda em worker
+ * (run_command_async / GThread); fill dos widgets sempre no idle/main. */
 
-static gint
-get_volume_percent (void)
+static const gchar *volume_icon_for_level (gint percent);
+
+static AudioBackend audio_cached_backend = AUDIO_NONE;
+static gboolean audio_backend_probed = FALSE;
+static gboolean audio_have_amixer = FALSE;
+
+static AudioBackend
+audio_get_backend_cached (void)
 {
-  gchar       *output;
-  gint         value = -1;
-  const gchar *p;
-
-  if (command_exists ("pactl"))
+  if (!audio_backend_probed)
     {
-      output = run_command ("pactl get-sink-volume @DEFAULT_SINK@");
-      value = parse_first_percent (output);
-      g_free (output);
-      if (value >= 0)
-        return value;
+      if (command_exists ("pactl"))
+        audio_cached_backend = AUDIO_PACTL;
+      else if (command_exists ("wpctl"))
+        audio_cached_backend = AUDIO_WPCTL;
+      else
+        audio_cached_backend = AUDIO_NONE;
+      audio_have_amixer = command_exists ("amixer");
+      audio_backend_probed = TRUE;
     }
-  if (command_exists ("wpctl"))
+  return audio_cached_backend;
+}
+
+typedef struct
+{
+  QuickSettings *qs;
+  AudioBackend   backend;
+  gboolean       use_amixer;
+} AudioVolReq;
+
+static void
+audio_volume_done (const gchar *output,
+                   const gchar *errout,
+                   gboolean     ok,
+                   gpointer     user_data)
+{
+  AudioVolReq   *req = user_data;
+  QuickSettings *qs = req->qs;
+  gint           value = -1;
+  const gchar   *p;
+
+  (void) errout;
+  if (!qs->dead && ok && output != NULL)
     {
-      output = run_command ("wpctl get-volume @DEFAULT_AUDIO_SINK@");
-      if (output != NULL)
+      if (req->backend == AUDIO_PACTL)
+        value = parse_first_percent (output);
+      else if (req->backend == AUDIO_WPCTL)
         {
           p = strstr (output, "Volume:");
           if (p != NULL)
             value = (gint) (g_ascii_strtod (p + 7, NULL) * 100.0 + 0.5);
-          g_free (output);
-          if (value >= 0)
-            return value;
         }
+      else if (req->use_amixer)
+        value = parse_first_percent (output);
     }
-  if (command_exists ("amixer"))
+  if (!qs->dead)
     {
-      output = run_command ("amixer get Master");
-      value = parse_first_percent (output);
-      g_free (output);
+      qs->updating = TRUE;
+      value = (value > 150) ? 150 : value;
+      if (value >= 0)
+        {
+          gtk_range_set_value (GTK_RANGE (qs->vol_scale), value);
+          gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
+                                        volume_icon_for_level (value),
+                                        GTK_ICON_SIZE_LARGE_TOOLBAR);
+          gtk_widget_set_sensitive (qs->vol_scale, TRUE);
+          gtk_widget_set_tooltip_text (qs->vol_scale,
+                                       value > 100
+                                       ? "Volume (boosted above 100%)"
+                                       : "Volume");
+        }
+      else
+        {
+          gtk_widget_set_sensitive (qs->vol_scale, FALSE);
+          gtk_widget_set_tooltip_text (qs->vol_scale, "Volume unavailable");
+        }
+      qs->updating = FALSE;
     }
-  return value;
+  qs_unref (qs);
+  g_free (req);
 }
 
 static void
@@ -58,15 +105,23 @@ set_volume_percent (gint value)
   gchar *cmd;
 
   value = CLAMP (value, 0, 150);
-  if (command_exists ("pactl"))
-    cmd = g_strdup_printf ("pactl set-sink-volume @DEFAULT_SINK@ %d%%", value);
-  else if (command_exists ("wpctl"))
-    cmd = g_strdup_printf ("wpctl set-volume @DEFAULT_AUDIO_SINK@ %d%%", value);
-  else if (command_exists ("amixer"))
-    /* ALSA caps at 100%, no overamplification. */
-    cmd = g_strdup_printf ("amixer -q sset Master %d%%", CLAMP (value, 0, 100));
-  else
-    return;
+  /* Backend já cacheado: sem command_exists/spawn extra na UI.
+   * spawn_command é fire-and-forget (não bloqueia). */
+  switch (audio_get_backend_cached ())
+    {
+    case AUDIO_PACTL:
+      cmd = g_strdup_printf ("pactl set-sink-volume @DEFAULT_SINK@ %d%%", value);
+      break;
+    case AUDIO_WPCTL:
+      cmd = g_strdup_printf ("wpctl set-volume @DEFAULT_AUDIO_SINK@ %d%%", value);
+      break;
+    default:
+      if (!audio_have_amixer)
+        return;
+      /* ALSA caps at 100%, no overamplification. */
+      cmd = g_strdup_printf ("amixer -q sset Master %d%%", CLAMP (value, 0, 100));
+      break;
+    }
   spawn_command (cmd);
   g_free (cmd);
 }
@@ -84,8 +139,8 @@ volume_icon_for_level (gint percent)
     return "audio-volume-medium-symbolic";
   return "audio-volume-high-symbolic";
 }
-/* ---------------- audio device listing ----------------
- * pactl preferred, wpctl fallback. Combo id = pactl name or wpctl number. */
+/* Audio device listing: pactl preferred, wpctl fallback.
+ * Combo id = pactl name or wpctl number. */
 
 /* Maps pactl device name -> Description from "pactl list sinks/sources".
  * block_prefix is "Sink #" or "Source #". */
@@ -369,32 +424,10 @@ parse_wpctl_section (const gchar *status_output,
 }
 
 static GList *
-list_wpctl_sinks (void)
-{
-  gchar *status = run_command ("wpctl status");
-  GList *devs = parse_wpctl_section (status, "Sinks:");
-
-  g_free (status);
-  return devs;
-}
-
-static GList *
-list_wpctl_sources (void)
-{
-  gchar *status = run_command ("wpctl status");
-  GList *devs = parse_wpctl_section (status, "Sources:");
-
-  g_free (status);
-  return devs;
-}
-
-static GList *
 list_sinks (AudioBackend backend)
 {
   if (backend == AUDIO_PACTL)
     return list_pactl_sinks ();
-  if (backend == AUDIO_WPCTL)
-    return list_wpctl_sinks ();
   return NULL;
 }
 
@@ -403,8 +436,6 @@ list_sources (AudioBackend backend)
 {
   if (backend == AUDIO_PACTL)
     return list_pactl_sources ();
-  if (backend == AUDIO_WPCTL)
-    return list_wpctl_sources ();
   return NULL;
 }
 
@@ -491,7 +522,6 @@ set_default_source (QuickSettings *qs,
       g_free (cmd);
     }
 }
-/* Icon + combo row on the shared grid; returns the combo. */
 static GtkWidget *
 make_device_row (GtkWidget   *grid,
                  gint         row,
@@ -516,7 +546,6 @@ make_device_row (GtkWidget   *grid,
   return combo;
 }
 
-/* Fill combo with devices, selecting the default one. */
 static void
 fill_device_combo (GtkWidget   *combo,
                    GList       *devs,
@@ -546,36 +575,41 @@ fill_device_combo (GtkWidget   *combo,
     }
 }
 
-/* Reload output/input device lists and select the current defaults. */
-void
-audio_refresh_devices (QuickSettings *qs)
+/* Reload output/input device lists and select the current defaults.
+ * Async: pactl/wpctl leitura roda em worker (sem spawn sync na UI);
+ * fill dos combos no idle (main loop) com qs_ref/dead. */
+#define AUDIO_DATA_LOADING "qs-audio-loading"
+
+typedef struct
 {
-  GList *sinks;
-  GList *sources;
-  GList *l;
+  QuickSettings *qs;
+  AudioBackend   backend;
+  GList         *sinks;
+  GList         *sources;
+} AudioLoad;
+
+static gboolean
+audio_devices_idle (gpointer data)
+{
+  AudioLoad     *load = data;
+  QuickSettings *qs = load->qs;
+  GList         *l;
+
+  if (qs->dead)
+    {
+      g_list_free_full (load->sinks, audio_dev_free);
+      g_list_free_full (load->sources, audio_dev_free);
+      qs_unref (qs);
+      g_free (load);
+      return G_SOURCE_REMOVE;
+    }
+  if (qs->popup != NULL)
+    g_object_set_data (G_OBJECT (qs->popup), AUDIO_DATA_LOADING, NULL);
 
   qs->updating = TRUE;
-
-  if (command_exists ("pactl"))
-    qs->audio_backend = AUDIO_PACTL;
-  else if (command_exists ("wpctl"))
-    qs->audio_backend = AUDIO_WPCTL;
-  else
-    qs->audio_backend = AUDIO_NONE;
-
-  if (qs->audio_backend == AUDIO_NONE)
-    {
-      fill_device_combo (qs->sink_combo, NULL, "Install pulseaudio-utils");
-      fill_device_combo (qs->source_combo, NULL, "Install pulseaudio-utils");
-      gtk_label_set_text (GTK_LABEL (qs->audio_sub), "No audio backend");
-      qs->updating = FALSE;
-      return;
-    }
-
-  sinks = list_sinks (qs->audio_backend);
-  fill_device_combo (qs->sink_combo, sinks, "No output devices");
+  fill_device_combo (qs->sink_combo, load->sinks, "No output devices");
   gtk_label_set_text (GTK_LABEL (qs->audio_sub), "No output devices");
-  for (l = sinks; l != NULL; l = l->next)
+  for (l = load->sinks; l != NULL; l = l->next)
     {
       AudioDev *dev = l->data;
 
@@ -585,13 +619,67 @@ audio_refresh_devices (QuickSettings *qs)
           break;
         }
     }
-  g_list_free_full (sinks, audio_dev_free);
-
-  sources = list_sources (qs->audio_backend);
-  fill_device_combo (qs->source_combo, sources, "No input devices");
-  g_list_free_full (sources, audio_dev_free);
-
+  fill_device_combo (qs->source_combo, load->sources, "No input devices");
   qs->updating = FALSE;
+
+  g_list_free_full (load->sinks, audio_dev_free);
+  g_list_free_full (load->sources, audio_dev_free);
+  qs_unref (qs);
+  g_free (load);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+audio_devices_thread (gpointer data)
+{
+  AudioLoad *load = data;
+
+  if (load->backend == AUDIO_PACTL)
+    {
+      load->sinks = list_sinks (AUDIO_PACTL);
+      load->sources = list_sources (AUDIO_PACTL);
+    }
+  else if (load->backend == AUDIO_WPCTL)
+    {
+      /* Um único "wpctl status" serve sinks+sources. */
+      gchar *status = run_command ("wpctl status");
+
+      load->sinks = parse_wpctl_section (status, "Sinks:");
+      load->sources = parse_wpctl_section (status, "Sources:");
+      g_free (status);
+    }
+  g_idle_add (audio_devices_idle, load);
+  return NULL;
+}
+
+void
+audio_refresh_devices (QuickSettings *qs)
+{
+  AudioBackend backend = audio_get_backend_cached ();
+  AudioLoad   *load;
+
+  qs->audio_backend = backend;
+  if (backend == AUDIO_NONE)
+    {
+      qs->updating = TRUE;
+      fill_device_combo (qs->sink_combo, NULL, "Install pulseaudio-utils");
+      fill_device_combo (qs->source_combo, NULL, "Install pulseaudio-utils");
+      gtk_label_set_text (GTK_LABEL (qs->audio_sub), "No audio backend");
+      qs->updating = FALSE;
+      return;
+    }
+  if (qs->popup != NULL
+      && g_object_get_data (G_OBJECT (qs->popup), AUDIO_DATA_LOADING) != NULL)
+    return;
+  gtk_label_set_text (GTK_LABEL (qs->audio_sub), "Loading…");
+  load = g_new0 (AudioLoad, 1);
+  load->qs = qs;
+  load->backend = backend;
+  qs_ref (qs);
+  if (qs->popup != NULL)
+    g_object_set_data (G_OBJECT (qs->popup), AUDIO_DATA_LOADING,
+                       GUINT_TO_POINTER (1));
+  g_thread_unref (g_thread_new ("qs-audio", audio_devices_thread, load));
 }
 
 static void
@@ -643,8 +731,6 @@ on_source_changed (GtkComboBox *combo,
   set_default_source (qs, id);
 }
 
-/* ---------------- section: build + refresh ---------------- */
-
 static void
 on_audio_tile_clicked (GtkButton *button,
                        gpointer   user_data)
@@ -676,10 +762,8 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   GtkWidget *in_grid;
   GtkWidget *audio_back;
 
-  /* Slider on the main page; selectors live on the sub-page. */
   make_slider_row (sound_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
-  /* Tick mark showing where 100% ends and overamplification begins. */
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
   /* The bottom mark makes this row taller below the trough; keep the
    * icon (and scale) vertically centered so the icon stays with the bar. */
@@ -697,7 +781,6 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (audio_tile, "clicked",
                     G_CALLBACK (on_audio_tile_clicked), qs);
 
-  /* Sub-page with the output/input selectors. */
   audio_page = make_sub_page ("Audio devices", &audio_back);
   out_grid = make_group (audio_page, "Output");
   qs->sink_combo = make_device_row (out_grid, 0, "audio-speakers-symbolic",
@@ -719,33 +802,34 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                     G_CALLBACK (on_source_changed), qs);
 }
 
+/* Refresh slider position/icon. Async de 1 comando do backend cacheado;
+ * nunca spawna sync na UI. */
 void
 audio_refresh_volume (QuickSettings *qs)
 {
-  gint volume;
+  AudioBackend backend = audio_get_backend_cached ();
+  AudioVolReq *req;
+  const gchar *cmd;
 
-  qs->updating = TRUE;
-
-  volume = get_volume_percent ();
-  /* pactl allows > 150% (set externally); the slider tops out at 150. */
-  volume = (volume > 150) ? 150 : volume;
-  if (volume >= 0)
-    {
-      gtk_range_set_value (GTK_RANGE (qs->vol_scale), volume);
-      gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
-                                    volume_icon_for_level (volume),
-                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
-      gtk_widget_set_sensitive (qs->vol_scale, TRUE);
-      gtk_widget_set_tooltip_text (qs->vol_scale,
-                                   volume > 100
-                                   ? "Volume (boosted above 100%)"
-                                   : "Volume");
-    }
+  qs->audio_backend = backend;
+  if (backend == AUDIO_PACTL)
+    cmd = "pactl get-sink-volume @DEFAULT_SINK@";
+  else if (backend == AUDIO_WPCTL)
+    cmd = "wpctl get-volume @DEFAULT_AUDIO_SINK@";
+  else if (audio_have_amixer)
+    cmd = "amixer get Master";
   else
     {
+      qs->updating = TRUE;
       gtk_widget_set_sensitive (qs->vol_scale, FALSE);
       gtk_widget_set_tooltip_text (qs->vol_scale, "Volume unavailable");
+      qs->updating = FALSE;
+      return;
     }
-
-  qs->updating = FALSE;
+  req = g_new0 (AudioVolReq, 1);
+  req->qs = qs;
+  req->backend = backend;
+  req->use_amixer = (backend == AUDIO_NONE && audio_have_amixer);
+  qs_ref (qs);
+  run_command_async (cmd, audio_volume_done, req);
 }

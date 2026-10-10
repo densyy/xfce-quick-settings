@@ -1,6 +1,5 @@
 #include "qs-ui.h"
-
-/* ---------------- UI ---------------- */
+#include "qs-theme.h"
 
 void
 ui_add_class (GtkWidget   *widget,
@@ -9,8 +8,6 @@ ui_add_class (GtkWidget   *widget,
   gtk_style_context_add_class (gtk_widget_get_style_context (widget), cls);
 }
 
-/* Creates a titled group (header label + content grid) inside a vertical
- * box. Returns the content grid for attaching rows. */
 GtkWidget *
 make_group (GtkWidget   *box,
             const gchar *title)
@@ -24,18 +21,6 @@ make_group (GtkWidget   *box,
   gtk_box_pack_start (GTK_BOX (box), header, FALSE, FALSE, 0);
 
   grid = gtk_grid_new ();
-  gtk_grid_set_row_spacing (GTK_GRID (grid), QS_INNER_GAP);
-  gtk_grid_set_column_spacing (GTK_GRID (grid), QS_PAGE_PAD);
-  gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
-
-  return grid;
-}
-
-GtkWidget *
-make_plain_grid (GtkWidget *box)
-{
-  GtkWidget *grid = gtk_grid_new ();
-
   gtk_grid_set_row_spacing (GTK_GRID (grid), QS_INNER_GAP);
   gtk_grid_set_column_spacing (GTK_GRID (grid), QS_PAGE_PAD);
   gtk_box_pack_start (GTK_BOX (box), grid, FALSE, FALSE, 0);
@@ -79,8 +64,6 @@ make_slider_row (GtkWidget    *grid,
     *icon_out = icon;
 }
 
-/* ---------------- connection pages ---------------- */
-
 void
 set_tile_active (GtkWidget *tile,
                  gboolean   on)
@@ -91,31 +74,6 @@ set_tile_active (GtkWidget *tile,
     gtk_style_context_add_class (ctx, "qs-tile-active");
   else
     gtk_style_context_remove_class (ctx, "qs-tile-active");
-}
-
-GtkWidget *
-make_tile (GtkWidget   *box,
-           const gchar *icon_name,
-           const gchar *label)
-{
-  GtkWidget *button;
-  GtkWidget *hbox;
-  GtkWidget *image;
-  GtkWidget *text;
-
-  button = gtk_button_new ();
-  ui_add_class (button, "qs-tile");
-  hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
-  gtk_container_set_border_width (GTK_CONTAINER (hbox), 4);
-  image = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
-  gtk_image_set_pixel_size (GTK_IMAGE (image), QS_MAIN_ICON_PX);
-  text = gtk_label_new (label);
-  gtk_box_pack_start (GTK_BOX (hbox), image, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (hbox), text, FALSE, FALSE, 0);
-  gtk_container_add (GTK_CONTAINER (button), hbox);
-  gtk_widget_set_size_request (button, -1, 48);
-  gtk_box_pack_start (GTK_BOX (box), button, TRUE, TRUE, 0);
-  return button;
 }
 
 GtkWidget *
@@ -191,8 +149,6 @@ make_mini_tile (GtkWidget    *box,
   return button;
 }
 
-/* Generic sub-page: header (back + title + switch), scan button,
- * scrollable list, status line. */
 GtkWidget *
 build_device_page (const gchar *title,
                    const gchar *scan_label,
@@ -243,19 +199,70 @@ build_device_page (const gchar *title,
   return page;
 }
 
+/* Reentrancy guard for clear_list_box: destroying rows can synchronously
+ * emit list signals whose handlers refill the list (see bt_filling in
+ * qs-net.c). A nested clear must not destroy rows out from under the
+ * outer emission, so it unparents its snapshot now and destroys it idle. */
+static gboolean ui_clearing = FALSE;
+
+typedef struct
+{
+  GList *widgets; /* GtkWidget*, each g_object_ref'd */
+} UiClearIdle;
+
+static gboolean
+ui_clear_idle_destroy (gpointer data)
+{
+  UiClearIdle *c = data;
+  GList       *l;
+
+  for (l = c->widgets; l != NULL; l = l->next)
+    {
+      gtk_widget_destroy (GTK_WIDGET (l->data));
+      g_object_unref (l->data);
+    }
+  g_list_free (c->widgets);
+  g_free (c);
+  return G_SOURCE_REMOVE;
+}
+
 void
 clear_list_box (GtkWidget *list)
 {
-  GList *children = gtk_container_get_children (GTK_CONTAINER (list));
+  GList *children;
   GList *l;
 
+  if (list == NULL || !GTK_IS_CONTAINER (list))
+    return;
+
+  children = gtk_container_get_children (GTK_CONTAINER (list));
+  if (children == NULL)
+    return;
+
+  if (ui_clearing)
+    {
+      UiClearIdle *c = g_new0 (UiClearIdle, 1);
+
+      /* Unparent now so the refill sees an empty list; the actual
+       * destroy runs after the current signal emission unwinds. */
+      for (l = children; l != NULL; l = l->next)
+        {
+          g_object_ref (l->data);
+          gtk_container_remove (GTK_CONTAINER (list), GTK_WIDGET (l->data));
+          c->widgets = g_list_prepend (c->widgets, l->data);
+        }
+      g_list_free (children);
+      g_idle_add (ui_clear_idle_destroy, c);
+      return;
+    }
+
+  ui_clearing = TRUE;
   for (l = children; l != NULL; l = l->next)
     gtk_widget_destroy (GTK_WIDGET (l->data));
   g_list_free (children);
+  ui_clearing = FALSE;
 }
 
-/* Horizontal <hr> between groups/rows (never before first / after last).
- * Same pattern as sysmon_add_separator: qs-sep class + 8px top/bottom. */
 void
 ui_add_separator (GtkWidget *box)
 {
@@ -289,63 +296,14 @@ make_placeholder_row (const gchar *text)
   return row;
 }
 
-/* Shared visual language: one radius, theme-aware colors, type scale.
- * Every screen uses only these classes, so all pages share one token. */
+/* Shim: the stylesheet lives in qs-theme.c (SRP). Kept so existing
+ * callers (qs-plugin.c) don't churn. */
 void
 ui_load_css (void)
 {
-  static gboolean  css_loaded = FALSE;
-  GtkCssProvider  *provider;
-
-  if (css_loaded)
-    return;
-  provider = gtk_css_provider_new ();
-  gtk_css_provider_load_from_data (provider,
-    ".qs-section { font-weight: bold; font-size: smaller;"
-    " color: alpha(@theme_fg_color, 0.6); }"
-    ".qs-page-title { font-weight: bold; font-size: larger; }"
-    ".qs-title { font-weight: bold; }"
-    ".qs-mini-title { font-weight: bold; font-size: smaller; }"
-    ".qs-sub, .qs-status { color: alpha(@theme_fg_color, 0.6);"
-    " font-size: smaller; }"
-    ".qs-value { font-weight: bold; font-size: larger; }"
-    ".qs-sys-num { font-weight: bold; font-size: 0.85em; }"
-    ".qs-back { min-width: 32px; min-height: 32px; padding: 0;"
-    " border-radius: 999px; }"
-    ".qs-tile, .qs-btn { border-radius: 10px; }"
-    ".qs-tile { padding: 6px 8px; }"
-    ".qs-compact { padding: 2px 8px; min-height: 0; }"
-    ".qs-btn { min-height: 40px; }"
-    ".qs-tile-active, button.qs-tile:checked {"
-    " background-color: alpha(@theme_selected_bg_color, 0.22);"
-    " border-color: alpha(@theme_selected_bg_color, 0.6);"
-    " color: @theme_fg_color; }"
-    ".qs-card { background-color: @theme_base_color;"
-    " border: 1px solid @borders; border-radius: 10px; }"
-    "list.qs-list { background-color: transparent; border: none; }"
-    "list.qs-list row { background-image: none; background-color: transparent;"
-    " border: none; box-shadow: none; padding: 0; }"
-    "list.qs-list row.qs-card { background-color: @theme_base_color;"
-    " border: 1px solid @borders; border-radius: 10px; }"
-    "list.qs-list row:selected { background-color: transparent;"
-    " color: @theme_fg_color; }"
-    "scale.qs-slider trough { min-height: 6px; border-radius: 3px; }"
-    "scale.qs-slider highlight { min-height: 6px; border-radius: 3px;"
-    " background-color: @theme_selected_bg_color; border: none; }"
-    "scale.qs-slider slider { min-width: 16px; min-height: 16px;"
-    " border-radius: 999px; }"
-    ".qs-combo { min-height: 40px; padding-left: 12px; }"
-    "separator.qs-sep { color: alpha(@theme_fg_color, 0.15);"
-    " background-color: alpha(@theme_fg_color, 0.15);"
-    " background-image: none; min-height: 1px; }", -1, NULL);
-  gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
-    GTK_STYLE_PROVIDER (provider),
-    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-  g_object_unref (provider);
-  css_loaded = TRUE;
+  qs_theme_load ();
 }
 
-/* Sub-page shell: header (back + bold title), custom content packed below. */
 GtkWidget *
 make_sub_page (const gchar *title,
                GtkWidget  **back_out)
