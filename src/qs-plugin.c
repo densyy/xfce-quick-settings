@@ -21,6 +21,7 @@ qs_unref (QuickSettings *qs)
     {
       g_free (qs->bt_controller);
       g_free (qs->sysmon_disk_key);
+      g_free (qs->display_last);
       g_free (qs);
     }
 }
@@ -169,6 +170,7 @@ on_button_clicked (GtkButton *button,
 
   audio_refresh_volume (qs);
   display_refresh_brightness (qs);
+  display_refresh_tile (qs);
   audio_refresh_devices (qs);
   net_update_tiles (qs);
   net_refresh_bt_tile (qs); /* async: corrects the BT tile once probed */
@@ -282,6 +284,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   on_size_changed (plugin, xfce_panel_plugin_get_size (plugin), qs);
   audio_refresh_volume (qs);
   display_refresh_brightness (qs);
+  display_refresh_tile (qs);
   audio_refresh_devices (qs);
   net_update_tiles (qs);
   net_refresh_bt_tile (qs);

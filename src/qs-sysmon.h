@@ -3,7 +3,7 @@
 
 #include "qs-core.h"
 
-/* One disk entry: display name + preformatted "used / total · pct" text. */
+/* One disk entry: display name + compact "used/total" text. */
 typedef struct
 {
   gchar   *name;
@@ -11,8 +11,7 @@ typedef struct
   gdouble  fraction; /* used / total, 0-1 */
 } SysmonDisk;
 
-/* Builds the System tile + an empty sub-page (layout removed; the fresh
- * component goes here). */
+/* Builds the System tile + the System card page (Memory/CPU/disk cards). */
 void sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs);
 /* Stops the refresh timer (safe to call when already stopped). */
 void sysmon_stop (QuickSettings *qs);

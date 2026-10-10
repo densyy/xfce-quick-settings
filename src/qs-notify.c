@@ -132,26 +132,91 @@ notice_time (gint64 timestamp_usec)
   return g_date_time_format (dt, "%d/%m %H:%M");
 }
 
+/* Collapsed/expanded state for compact notice rows.
+ * Each expandable row stores its single preview label ("app • body")
+ * under NOTICE_BODY_KEY and a 0/1 flag under NOTICE_EXPANDED_KEY.
+ * Only "button-press-event" toggles (not "activate"): a click would
+ * otherwise fire both and cancel itself out. */
+#define NOTICE_BODY_KEY "qs-notice-body"
+#define NOTICE_EXPANDED_KEY "qs-notice-expanded"
+
+static void
+notice_row_set_expanded (GtkWidget *row,
+                         gboolean   expanded)
+{
+  GtkWidget *body = g_object_get_data (G_OBJECT (row), NOTICE_BODY_KEY);
+
+  if (body == NULL)
+    return;
+  if (expanded)
+    {
+      gtk_label_set_lines (GTK_LABEL (body), -1);
+      gtk_label_set_ellipsize (GTK_LABEL (body), PANGO_ELLIPSIZE_NONE);
+      gtk_widget_set_tooltip_text (row, "Click to collapse");
+    }
+  else
+    {
+      gtk_label_set_lines (GTK_LABEL (body), 1);
+      gtk_label_set_ellipsize (GTK_LABEL (body), PANGO_ELLIPSIZE_END);
+      gtk_widget_set_tooltip_text (row, "Click to expand");
+    }
+  g_object_set_data (G_OBJECT (row), NOTICE_EXPANDED_KEY,
+                     GUINT_TO_POINTER (expanded ? 1 : 0));
+}
+
+static void
+notice_row_toggle (GtkWidget *row)
+{
+  gboolean expanded;
+
+  if (g_object_get_data (G_OBJECT (row), NOTICE_BODY_KEY) == NULL)
+    return;
+  expanded = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (row),
+                                                  NOTICE_EXPANDED_KEY)) != 0;
+  notice_row_set_expanded (row, !expanded);
+}
+
+static gboolean
+on_notice_row_button_press (GtkWidget      *row,
+                            GdkEventButton *event,
+                            gpointer        user_data)
+{
+  (void) user_data;
+  if (event != NULL && event->button != GDK_BUTTON_PRIMARY)
+    return FALSE;
+  notice_row_toggle (row);
+  return FALSE;
+}
+
+/* Compact collapsed row: line 1 = bold summary (1 line, ellipsis) + time
+ * pinned right; line 2 = "app • body" truncated to 1 line with ellipsis
+ * (app alone when there is no body). Clicking an expandable row toggles
+ * the full wrapped body. Timestamp/counter/Clear/refresh live elsewhere
+ * and are untouched. */
 static GtkWidget *
 make_notice_row (Notice *n)
 {
   GtkWidget *row = gtk_list_box_row_new ();
-  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL,
+                                 QS_TIGHT_GAP / 2);
   GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
                                    QS_INNER_GAP);
   GtkWidget *title;
   GtkWidget *time_label;
-  GtkWidget *sub;
+  GtkWidget *preview;
   gchar     *time;
-  gchar     *sub_text;
+  gchar     *preview_text;
   const gchar *title_text;
+  gboolean   has_body;
+  gboolean   title_is_app;
 
   ui_add_class (row, "qs-card");
   gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
   gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
-  gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_CONTENT_PAD);
+  /* Tighter than QS_CONTENT_PAD (10) so a collapsed row stays ~2 lines. */
+  gtk_container_set_border_width (GTK_CONTAINER (vbox), 6);
 
   /* Bold summary with the time pinned to the right.
    * Plain text (no markup escape): GtkLabel shows text literally,
@@ -159,10 +224,12 @@ make_notice_row (Notice *n)
   title_text = (n->summary != NULL && *n->summary != '\0')
                ? n->summary
                : (n->app != NULL && *n->app != '\0' ? n->app : "Notification");
+  title_is_app = (g_strcmp0 (title_text, n->app) == 0);
   title = gtk_label_new (title_text);
   ui_add_class (title, "qs-title");
   gtk_widget_set_halign (title, GTK_ALIGN_START);
   gtk_widget_set_hexpand (title, TRUE);
+  gtk_label_set_lines (GTK_LABEL (title), 1);
   gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
   time = notice_time (n->timestamp);
   time_label = gtk_label_new (time);
@@ -172,22 +239,33 @@ make_notice_row (Notice *n)
   gtk_box_pack_start (GTK_BOX (header), time_label, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (vbox), header, FALSE, FALSE, 0);
 
-  if (n->body != NULL && *n->body != '\0')
-    {
-      GtkWidget *body = gtk_label_new (n->body);
-      gtk_widget_set_halign (body, GTK_ALIGN_START);
-      gtk_label_set_line_wrap (GTK_LABEL (body), TRUE);
-      gtk_label_set_lines (GTK_LABEL (body), 3);
-      gtk_label_set_ellipsize (GTK_LABEL (body), PANGO_ELLIPSIZE_END);
-      gtk_box_pack_start (GTK_BOX (vbox), body, FALSE, FALSE, 0);
-    }
+  has_body = (n->body != NULL && *n->body != '\0');
+  if (has_body && !title_is_app && n->app != NULL && *n->app != '\0')
+    preview_text = g_strdup_printf ("%s \342\200\242 %s", n->app, n->body);
+  else if (has_body)
+    preview_text = g_strdup (n->body);
+  else
+    preview_text = g_strdup (n->app != NULL ? n->app : "");
+  preview = gtk_label_new (preview_text);
+  g_free (preview_text);
+  ui_add_class (preview, "qs-sub");
+  gtk_widget_set_halign (preview, GTK_ALIGN_START);
+  gtk_widget_set_hexpand (preview, TRUE);
+  gtk_label_set_line_wrap (GTK_LABEL (preview), TRUE);
+  gtk_label_set_lines (GTK_LABEL (preview), 1);
+  gtk_label_set_ellipsize (GTK_LABEL (preview), PANGO_ELLIPSIZE_END);
+  gtk_box_pack_start (GTK_BOX (vbox), preview, FALSE, FALSE, 0);
 
-  sub_text = g_strdup (n->app != NULL ? n->app : "");
-  sub = gtk_label_new (sub_text);
-  g_free (sub_text);
-  ui_add_class (sub, "qs-sub");
-  gtk_widget_set_halign (sub, GTK_ALIGN_START);
-  gtk_box_pack_start (GTK_BOX (vbox), sub, FALSE, FALSE, 0);
+  if (has_body)
+    {
+      gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
+      g_object_set_data (G_OBJECT (row), NOTICE_BODY_KEY, preview);
+      g_object_set_data (G_OBJECT (row), NOTICE_EXPANDED_KEY,
+                         GUINT_TO_POINTER (0));
+      gtk_widget_set_tooltip_text (row, "Click to expand");
+      g_signal_connect (row, "button-press-event",
+                        G_CALLBACK (on_notice_row_button_press), NULL);
+    }
 
   gtk_container_add (GTK_CONTAINER (row), vbox);
   return row;

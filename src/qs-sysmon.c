@@ -2,6 +2,7 @@
 #include "qs-ui.h"
 
 #include <sys/statvfs.h>
+#include <unistd.h>
 
 #define SYSMON_INTERVAL_S 10
 
@@ -126,16 +127,13 @@ sysmon_read_cpu (QuickSettings *qs)
   return CLAMP (percent, 0.0, 100.0);
 }
 
+/* Compact "used/total" for card headers; the percent lives on the bar. */
 gchar *
 sysmon_bytes_text (guint64 bytes,
                    guint64 total)
 {
-  gdouble pct = (total == 0) ? 0.0
-                             : 100.0 * (gdouble) bytes / (gdouble) total;
-
-  return g_strdup_printf ("%.1f / %.1f GB · %d%%",
-                          bytes / 1073741824.0, total / 1073741824.0,
-                          (gint) (pct + 0.5));
+  return g_strdup_printf ("%.1f/%.1f GB",
+                          bytes / 1073741824.0, total / 1073741824.0);
 }
 
 /* /proc/mounts escapes space/tab/newline/backslash as octal. */
@@ -256,36 +254,170 @@ sysmon_read_disks (void)
   return disks;
 }
 
-/* Usage block: optional title, "used / total" value, bar with % text. */
-static GtkWidget *
-make_usage_block (const gchar *title,
-                  GtkWidget  **value_out,
-                  GtkWidget  **bar_out)
+/* Adwaita ships no memory/cpu symbolic icons: prefer the freedesktop
+ * names when the active theme provides them, else use a guaranteed
+ * fallback so the card header never shows a broken image. */
+static const gchar *
+resolve_icon (const gchar *preferred,
+              const gchar *fallback)
 {
-  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
+  GtkIconTheme *theme = gtk_icon_theme_get_default ();
+
+  if (theme != NULL && gtk_icon_theme_has_icon (theme, preferred))
+    return preferred;
+  return fallback;
+}
+
+#define SYSMON_MEM_ICON_FALLBACK "media-flash-symbolic"
+#define SYSMON_CPU_ICON_FALLBACK "computer-symbolic"
+#define SYSMON_DISK_ICON "drive-harddisk-symbolic"
+
+/* Resource card: header (icon + title + compact value) over a % bar.
+ * The value/bar widgets are returned for in-place refresh and also
+ * stashed on the card ("qs-sys-value"/"qs-sys-bar") so disk cards can
+ * be updated without tracking extra state. */
+static GtkWidget *
+make_sys_card (GtkWidget   *box,
+               const gchar *icon_name,
+               const gchar *title,
+               GtkWidget  **value_out,
+               GtkWidget  **bar_out)
+{
+  GtkWidget *card = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
+  GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
+  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name,
+                                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
+  GtkWidget *name = gtk_label_new (title);
   GtkWidget *value = gtk_label_new ("—");
   GtkWidget *bar = gtk_progress_bar_new ();
 
-  if (title != NULL)
-    {
-      GtkWidget *title_label = gtk_label_new (title);
-
-      ui_add_class (title_label, "qs-title");
-      gtk_widget_set_halign (title_label, GTK_ALIGN_START);
-      gtk_label_set_ellipsize (GTK_LABEL (title_label), PANGO_ELLIPSIZE_END);
-      gtk_box_pack_start (GTK_BOX (vbox), title_label, FALSE, FALSE, 0);
-    }
+  ui_add_class (card, "qs-card");
+  gtk_container_set_border_width (GTK_CONTAINER (card), QS_CONTENT_PAD);
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
+  ui_add_class (name, "qs-title");
+  gtk_widget_set_halign (name, GTK_ALIGN_START);
+  gtk_widget_set_hexpand (name, TRUE);
+  gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
   ui_add_class (value, "qs-value");
-  gtk_widget_set_halign (value, GTK_ALIGN_START);
-  gtk_box_pack_start (GTK_BOX (vbox), value, FALSE, FALSE, 0);
+  gtk_widget_set_halign (value, GTK_ALIGN_END);
+  gtk_box_pack_start (GTK_BOX (head), icon, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (head), name, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (head), value, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (card), head, FALSE, FALSE, 0);
   gtk_progress_bar_set_show_text (GTK_PROGRESS_BAR (bar), TRUE);
-  gtk_box_pack_start (GTK_BOX (vbox), bar, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (card), bar, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (box), card, FALSE, FALSE, 0);
+  g_object_set_data (G_OBJECT (card), "qs-sys-value", value);
+  g_object_set_data (G_OBJECT (card), "qs-sys-bar", bar);
 
   if (value_out != NULL)
     *value_out = value;
   if (bar_out != NULL)
     *bar_out = bar;
-  return vbox;
+  return card;
+}
+
+/* Distinct (physical id, core id) keys for qsort-style dedup. */
+static gint
+cpu_pair_compare (gconstpointer a,
+                  gconstpointer b)
+{
+  guint64 ua = *(const guint64 *) a;
+  guint64 ub = *(const guint64 *) b;
+
+  if (ua < ub)
+    return -1;
+  if (ua > ub)
+    return 1;
+  return 0;
+}
+
+/* CPU topology ("6C/12T") for the CPU card header value. Physical cores
+ * come from distinct (physical id, core id) pairs in /proc/cpuinfo,
+ * threads from sysconf. Computed once and cached: topology never
+ * changes at runtime. Falls back to "12T" when cores can't be told
+ * apart (VMs, ARM without those fields). */
+static const gchar *
+sysmon_cpu_topology_text (void)
+{
+  static gchar *cached = NULL;
+  glong threads;
+  gint cores = 0;
+
+  if (cached != NULL)
+    return cached;
+  threads = sysconf (_SC_NPROCESSORS_ONLN);
+  if (threads <= 0)
+    threads = sysconf (_SC_NPROCESSORS_CONF);
+  if (threads <= 0)
+    threads = 1;
+  {
+    gchar *content = NULL;
+
+    if (g_file_get_contents ("/proc/cpuinfo", &content, NULL, NULL))
+      {
+        gchar **lines = g_strsplit (content, "\n", -1);
+        GArray *pairs = g_array_new (FALSE, FALSE, sizeof (guint64));
+        gint phys = -1;
+        gint core = -1;
+        gint i;
+
+        g_free (content);
+        for (i = 0; lines[i] != NULL; i++)
+          {
+            if (g_str_has_prefix (lines[i], "physical id"))
+              {
+                const gchar *colon = strchr (lines[i], ':');
+
+                if (colon != NULL)
+                  phys = atoi (colon + 1);
+              }
+            else if (g_str_has_prefix (lines[i], "core id"))
+              {
+                const gchar *colon = strchr (lines[i], ':');
+
+                if (colon != NULL)
+                  core = atoi (colon + 1);
+              }
+            else if (lines[i][0] == '\0')
+              {
+                if (phys >= 0 && core >= 0)
+                  {
+                    guint64 key = ((guint64) (guint32) phys << 32)
+                                  | (guint32) core;
+
+                    g_array_append_val (pairs, key);
+                  }
+                phys = -1;
+                core = -1;
+              }
+          }
+        if (phys >= 0 && core >= 0)
+          {
+            guint64 key = ((guint64) (guint32) phys << 32) | (guint32) core;
+
+            g_array_append_val (pairs, key);
+          }
+        if (pairs->len > 0)
+          {
+            guint j;
+
+            g_array_sort (pairs, cpu_pair_compare);
+            cores = 1;
+            for (j = 1; j < pairs->len; j++)
+              if (g_array_index (pairs, guint64, j)
+                  != g_array_index (pairs, guint64, j - 1))
+                cores++;
+          }
+        g_array_free (pairs, TRUE);
+        g_strfreev (lines);
+      }
+  }
+  if (cores > 0 && cores <= threads)
+    cached = g_strdup_printf ("%dC/%ldT", cores, (glong) threads);
+  else
+    cached = g_strdup_printf ("%ldT", (glong) threads);
+  return cached;
 }
 
 static void
@@ -302,7 +434,7 @@ sysmon_refresh (QuickSettings *qs)
       guint64 total = total_kb * 1024;
       gdouble frac = (gdouble) used / (gdouble) total;
 
-      text = g_strdup_printf ("%.1f / %.1f GB",
+      text = g_strdup_printf ("%.1f/%.1f GB",
                               used / 1073741824.0, total / 1073741824.0);
       gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
       g_free (text);
@@ -316,10 +448,12 @@ sysmon_refresh (QuickSettings *qs)
   cpu = sysmon_read_cpu (qs);
   if (cpu >= 0.0)
     {
-      text = g_strdup_printf ("%d%%", (gint) (cpu + 0.5));
-      gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value), text);
+      /* Header value shows static topology; the bar keeps live % use. */
+      gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value),
+                          sysmon_cpu_topology_text ());
       gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar),
                                      cpu / 100.0);
+      text = g_strdup_printf ("%d%%", (gint) (cpu + 0.5));
       gtk_progress_bar_set_text (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar),
                                  text);
       g_free (text);
@@ -341,19 +475,20 @@ sysmon_refresh (QuickSettings *qs)
       }
     if (g_strcmp0 (key->str, qs->sysmon_disk_key) == 0)
       {
-        GList *rows = gtk_container_get_children (GTK_CONTAINER (qs->sysmon_disk_box));
+        GList *cards = gtk_container_get_children (GTK_CONTAINER (qs->sysmon_disk_box));
         GList *l;
         guint  idx = 0;
 
-        for (l = rows; l != NULL && idx < disks->len; l = l->next, idx++)
+        for (l = cards; l != NULL && idx < disks->len; l = l->next, idx++)
           {
             SysmonDisk *d = g_ptr_array_index (disks, idx);
-            GList      *cols = gtk_container_get_children (GTK_CONTAINER (l->data));
-            guint       n = g_list_length (cols);
-            GtkWidget  *value = GTK_WIDGET (g_list_nth_data (cols, n - 2));
-            GtkWidget  *bar = GTK_WIDGET (g_list_nth_data (cols, n - 1));
+            GtkWidget  *value = g_object_get_data (G_OBJECT (l->data),
+                                                   "qs-sys-value");
+            GtkWidget  *bar = g_object_get_data (G_OBJECT (l->data),
+                                                 "qs-sys-bar");
 
-            if (GTK_IS_LABEL (value) && GTK_IS_PROGRESS_BAR (bar))
+            if (value != NULL && bar != NULL
+                && GTK_IS_LABEL (value) && GTK_IS_PROGRESS_BAR (bar))
               {
                 gtk_label_set_text (GTK_LABEL (value), d->text);
                 gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
@@ -363,9 +498,8 @@ sysmon_refresh (QuickSettings *qs)
                 gtk_progress_bar_set_text (GTK_PROGRESS_BAR (bar), text);
                 g_free (text);
               }
-            g_list_free (cols);
           }
-        g_list_free (rows);
+        g_list_free (cards);
         g_string_free (key, TRUE);
       }
     else
@@ -387,8 +521,9 @@ sysmon_refresh (QuickSettings *qs)
                 SysmonDisk *d = g_ptr_array_index (disks, i);
                 GtkWidget  *value = NULL;
                 GtkWidget  *bar = NULL;
-                GtkWidget  *block = make_usage_block (d->name, &value, &bar);
 
+                make_sys_card (qs->sysmon_disk_box, SYSMON_DISK_ICON,
+                               d->name, &value, &bar);
                 gtk_label_set_text (GTK_LABEL (value), d->text);
                 gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
                                                d->fraction);
@@ -396,8 +531,6 @@ sysmon_refresh (QuickSettings *qs)
                                         (gint) (d->fraction * 100.0 + 0.5));
                 gtk_progress_bar_set_text (GTK_PROGRESS_BAR (bar), text);
                 g_free (text);
-                gtk_box_pack_start (GTK_BOX (qs->sysmon_disk_box), block,
-                                    FALSE, FALSE, 0);
               }
           }
         g_free (qs->sysmon_disk_key);
@@ -470,10 +603,7 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *sys_tile;
   GtkWidget *page;
-  GtkWidget *mem_grid;
-  GtkWidget *cpu_grid;
   GtkWidget *disks_grid;
-  GtkWidget *block;
   GtkWidget *back;
 
   /* Mini tile in the shared action grid. */
@@ -481,16 +611,15 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);
 
-  /* One group per meter: title, "used / total" value, bar with % text. */
+  /* One card per resource: header (icon + title + compact value) + bar.
+   * Memory/CPU cards are fixed; disks get one card each under Disks. */
   page = make_sub_page ("System", &back);
-  mem_grid = make_group (page, "Memory");
-  block = make_usage_block (NULL,
-                             &qs->sysmon_ram_value, &qs->sysmon_ram_bar);
-  gtk_grid_attach (GTK_GRID (mem_grid), block, 0, 0, 2, 1);
-  cpu_grid = make_group (page, "CPU");
-  block = make_usage_block (NULL,
-                             &qs->sysmon_cpu_value, &qs->sysmon_cpu_bar);
-  gtk_grid_attach (GTK_GRID (cpu_grid), block, 0, 0, 2, 1);
+  make_sys_card (page, resolve_icon ("memory-symbolic",
+                                     SYSMON_MEM_ICON_FALLBACK),
+                 "Memory", &qs->sysmon_ram_value, &qs->sysmon_ram_bar);
+  make_sys_card (page, resolve_icon ("cpu-symbolic",
+                                     SYSMON_CPU_ICON_FALLBACK),
+                 "CPU", &qs->sysmon_cpu_value, &qs->sysmon_cpu_bar);
   disks_grid = make_group (page, "Disks");
   qs->sysmon_disk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_SECTION_GAP);
   gtk_grid_attach (GTK_GRID (disks_grid), qs->sysmon_disk_box, 0, 0, 2, 1);

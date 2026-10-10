@@ -393,6 +393,460 @@ make_night_button (GtkWidget   *box,
   return button;
 }
 
+/* ---------------- external monitors (xrandr) ----------------
+ * Query:  xrandr --query            (connected outputs + their modes)
+ * Mode:   xrandr --output MON --mode MODE
+ * Scale:  xrandr --output MON --scale FxF
+ * --scale chosen over --scale-from: --scale takes the UI factor directly
+ * (1.5 -> "1.5x1.5"); --scale-from would need per-monitor pixel math to
+ * express the same factor. xrandr accepts any positive factor, so every
+ * entry in SCALE_FACTORS is valid (nothing to filter).
+ * Without xrandr every combo shows "unavailable" and stays insensitive.
+ * Queries run via run_command_async; applies via spawn_command: the
+ * panel never blocks. */
+
+static const gchar *SCALE_FACTORS[] = { "1", "1.25", "1.5", "1.75", "2" };
+
+/* Valid output name ([A-Za-z0-9_.-], xrandr never emits anything else).
+ * Rejected names are skipped at parse time and never applied. */
+static gboolean
+valid_monitor (const gchar *s)
+{
+  const gchar *p;
+
+  if (s == NULL || *s == '\0' || strlen (s) > 64)
+    return FALSE;
+  for (p = s; *p != '\0'; p++)
+    if (!g_ascii_isalnum (*p) && *p != '-' && *p != '_' && *p != '.')
+      return FALSE;
+  return TRUE;
+}
+
+/* Valid mode ("1920x1080"): digits, one 'x', digits. */
+static gboolean
+valid_mode (const gchar *s)
+{
+  const gchar *x;
+  const gchar *p;
+
+  if (s == NULL || !g_ascii_isdigit (*s))
+    return FALSE;
+  x = strchr (s, 'x');
+  if (x == NULL || x == s || x[1] == '\0')
+    return FALSE;
+  for (p = s; p < x; p++)
+    if (!g_ascii_isdigit (*p))
+      return FALSE;
+  for (p = x + 1; *p != '\0'; p++)
+    if (!g_ascii_isdigit (*p))
+      return FALSE;
+  return TRUE;
+}
+
+static gboolean
+valid_scale (const gchar *s)
+{
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (SCALE_FACTORS); i++)
+    if (g_strcmp0 (s, SCALE_FACTORS[i]) == 0)
+      return TRUE;
+  return FALSE;
+}
+
+/* Connected outputs from "xrandr --query": header lines look like
+ * "eDP-1 connected [primary] 1600x900+0+0 (...)". The "connected" token
+ * must match exactly: "disconnected" lines carry no such token, so token
+ * comparison (not strstr) tells them apart. Returns GList of gchar*. */
+static GList *
+parse_monitors (const gchar *output)
+{
+  GList  *mons = NULL;
+  gchar **lines;
+  gint    i;
+
+  if (output == NULL)
+    return NULL;
+  lines = g_strsplit (output, "\n", -1);
+  for (i = 0; lines[i] != NULL; i++)
+    {
+      gchar  *s = g_strdup (lines[i]);
+      gchar **tok;
+      gint    t;
+      gboolean connected = FALSE;
+
+      g_strstrip (s);
+      if (*s == '\0')
+        {
+          g_free (s);
+          continue;
+        }
+      tok = g_strsplit_set (s, " \t", -1);
+      for (t = 1; tok[t] != NULL; t++)
+        if (g_strcmp0 (tok[t], "connected") == 0)
+          connected = TRUE;
+      if (connected && tok[0] != NULL && valid_monitor (tok[0]))
+        mons = g_list_append (mons, g_strdup (tok[0]));
+      g_strfreev (tok);
+      g_free (s);
+    }
+  g_strfreev (lines);
+  return mons;
+}
+
+/* Modes of one monitor: indented lines after its "connected" header,
+ * e.g. '   1920x1080     60.00 +  60.00'. current_out (caller frees)
+ * gets the mode whose line carries '*'. Returns GList of gchar*. */
+static GList *
+parse_modes (const gchar *output,
+             const gchar *monitor,
+             gchar      **current_out)
+{
+  GList  *modes = NULL;
+  gchar **lines;
+  gint    i;
+  gboolean in_block = FALSE;
+
+  if (current_out != NULL)
+    *current_out = NULL;
+  if (output == NULL || !valid_monitor (monitor))
+    return NULL;
+  lines = g_strsplit (output, "\n", -1);
+  for (i = 0; lines[i] != NULL; i++)
+    {
+      const gchar *line = lines[i];
+
+      if (*line == '\0')
+        continue;
+      if (*line == ' ' || *line == '\t')
+        {
+          gchar *s;
+          gchar *end;
+
+          if (!in_block)
+            continue;
+          s = g_strdup (line);
+          g_strstrip (s);
+          end = strpbrk (s, " \t");
+          if (end != NULL)
+            *end = '\0';
+          if (valid_mode (s))
+            {
+              modes = g_list_append (modes, g_strdup (s));
+              if (current_out != NULL && *current_out == NULL
+                  && strchr (line, '*') != NULL)
+                *current_out = g_strdup (s);
+            }
+          g_free (s);
+        }
+      else
+        {
+          gchar  *s = g_strdup (line);
+          gchar **tok;
+          gint    t;
+          gboolean connected = FALSE;
+
+          g_strstrip (s);
+          tok = g_strsplit_set (s, " \t", -1);
+          for (t = 1; tok[t] != NULL; t++)
+            if (g_strcmp0 (tok[t], "connected") == 0)
+              connected = TRUE;
+          in_block = (connected && tok[0] != NULL
+                      && g_strcmp0 (tok[0], monitor) == 0);
+          g_strfreev (tok);
+          g_free (s);
+        }
+    }
+  g_strfreev (lines);
+  return modes;
+}
+
+/* Icon + combo row on a group grid (same pattern as the audio devices). */
+static GtkWidget *
+make_combo_row (GtkWidget   *grid,
+                gint         row,
+                const gchar *icon_name,
+                const gchar *tooltip)
+{
+  GtkWidget *icon;
+  GtkWidget *combo;
+
+  icon = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
+  gtk_widget_set_halign (icon, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+  gtk_grid_attach (GTK_GRID (grid), icon, 0, row, 1, 1);
+
+  combo = gtk_combo_box_text_new ();
+  ui_add_class (combo, "qs-combo");
+  gtk_widget_set_hexpand (combo, TRUE);
+  gtk_widget_set_tooltip_text (combo, tooltip);
+  gtk_grid_attach (GTK_GRID (grid), combo, 1, row, 1, 1);
+
+  return combo;
+}
+
+/* Fill a text combo (id == label); empty list -> single insensitive row. */
+static void
+fill_combo (GtkWidget   *combo,
+            GList       *items,
+            const gchar *active,
+            const gchar *empty_text)
+{
+  GList *l;
+
+  gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (combo));
+  for (l = items; l != NULL; l = l->next)
+    gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo),
+                               (const gchar *) l->data,
+                               (const gchar *) l->data);
+  if (items == NULL)
+    {
+      gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo),
+                                 "none", empty_text);
+      gtk_combo_box_set_active (GTK_COMBO_BOX (combo), 0);
+      gtk_widget_set_sensitive (combo, FALSE);
+      return;
+    }
+  gtk_widget_set_sensitive (combo, TRUE);
+  if (active != NULL)
+    gtk_combo_box_set_active_id (GTK_COMBO_BOX (combo), active);
+  if (gtk_combo_box_get_active (GTK_COMBO_BOX (combo)) < 0)
+    gtk_combo_box_set_active (GTK_COMBO_BOX (combo), 0);
+}
+
+static void
+display_update_sub (QuickSettings *qs,
+                    const gchar   *mon,
+                    const gchar   *mode)
+{
+  gchar *text;
+
+  if (mon == NULL)
+    text = g_strdup ("No displays");
+  else if (mode != NULL)
+    text = g_strdup_printf ("%s · %s", mon, mode);
+  else
+    text = g_strdup (mon);
+  gtk_label_set_text (GTK_LABEL (qs->display_sub), text);
+  g_free (text);
+}
+
+/* Everything "unavailable": no xrandr on PATH (or query failed hard at
+ * tile-refresh time). Mirrors the audio "No audio backend" pattern. */
+static void
+display_unavailable (QuickSettings *qs)
+{
+  qs->updating = TRUE;
+  fill_combo (qs->mon_combo, NULL, NULL, "unavailable");
+  fill_combo (qs->mode_combo, NULL, NULL, "unavailable");
+  fill_combo (qs->scale_combo, NULL, NULL, "unavailable");
+  gtk_label_set_text (GTK_LABEL (qs->display_status),
+                       "xrandr not found (unavailable).");
+  gtk_label_set_text (GTK_LABEL (qs->display_sub), "unavailable");
+  gtk_widget_set_sensitive (qs->display_tile, FALSE);
+  qs->updating = FALSE;
+}
+
+static void
+display_query_done (const gchar *output,
+                    const gchar *errout,
+                    gboolean     ok,
+                    gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+  gchar         *prev;
+  GList         *mons = NULL;
+  GList         *l;
+  gchar         *sel = NULL;
+  GList         *modes = NULL;
+  gchar         *cur = NULL;
+  const gchar   *shown_mode;
+  gsize          i;
+
+  (void) errout;
+  if (qs->dead)
+    {
+      qs_unref (qs);
+      return;
+    }
+  qs->display_loading = FALSE;
+  qs->updating = TRUE;
+
+  if (!ok || output == NULL || *output == '\0')
+    {
+      fill_combo (qs->mon_combo, NULL, NULL, "No displays");
+      fill_combo (qs->mode_combo, NULL, NULL, "No displays");
+      fill_combo (qs->scale_combo, NULL, NULL, "No displays");
+      gtk_label_set_text (GTK_LABEL (qs->display_status),
+                           "Could not query displays.");
+      display_update_sub (qs, NULL, NULL);
+      qs->updating = FALSE;
+      qs_unref (qs);
+      return;
+    }
+
+  g_free (qs->display_last);
+  qs->display_last = g_strdup (output);
+
+  /* Keep the user's current selection when still connected. */
+  prev = g_strdup (gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo)));
+  if (prev != NULL
+      && (g_strcmp0 (prev, "none") == 0 || !valid_monitor (prev)))
+    {
+      g_free (prev);
+      prev = NULL;
+    }
+  mons = parse_monitors (output);
+  for (l = mons; l != NULL; l = l->next)
+    if (prev != NULL && g_strcmp0 ((const gchar *) l->data, prev) == 0)
+      {
+        sel = g_strdup ((const gchar *) l->data);
+        break;
+      }
+  g_free (prev);
+  if (sel == NULL && mons != NULL)
+    sel = g_strdup ((const gchar *) mons->data);
+  fill_combo (qs->mon_combo, mons, sel, "No displays");
+  g_list_free_full (mons, g_free);
+
+  if (sel != NULL)
+    {
+      modes = parse_modes (output, sel, &cur);
+      shown_mode = (cur != NULL) ? cur
+                   : (modes != NULL ? (const gchar *) modes->data : NULL);
+      fill_combo (qs->mode_combo, modes, shown_mode, "No modes");
+
+      gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (qs->scale_combo));
+      for (i = 0; i < G_N_ELEMENTS (SCALE_FACTORS); i++)
+        {
+          gchar *label = g_strdup_printf ("%sx", SCALE_FACTORS[i]);
+
+          gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (qs->scale_combo),
+                                     SCALE_FACTORS[i], label);
+          g_free (label);
+        }
+      gtk_combo_box_set_active_id (GTK_COMBO_BOX (qs->scale_combo), "1");
+      gtk_widget_set_sensitive (qs->scale_combo, TRUE);
+
+      gtk_label_set_text (GTK_LABEL (qs->display_status), NULL);
+      display_update_sub (qs, sel, shown_mode);
+      g_list_free_full (modes, g_free);
+      g_free (cur);
+    }
+  else
+    {
+      fill_combo (qs->mode_combo, NULL, NULL, "No displays");
+      fill_combo (qs->scale_combo, NULL, NULL, "No displays");
+      gtk_label_set_text (GTK_LABEL (qs->display_status),
+                           "No connected displays.");
+      display_update_sub (qs, NULL, NULL);
+    }
+
+  g_free (sel);
+  qs->updating = FALSE;
+  qs_unref (qs);
+}
+
+static void
+display_load_async (QuickSettings *qs)
+{
+  if (!command_exists ("xrandr"))
+    {
+      display_unavailable (qs);
+      return;
+    }
+  if (qs->display_loading)
+    return;
+  qs->display_loading = TRUE;
+  qs_ref (qs);
+  gtk_label_set_text (GTK_LABEL (qs->display_status), "Loading…");
+  run_command_async ("xrandr --query", display_query_done, qs);
+}
+
+static void
+on_mon_changed (GtkComboBox *combo,
+                gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+  const gchar   *id;
+  GList         *modes;
+  gchar         *cur = NULL;
+  const gchar   *shown;
+
+  if (qs->updating)
+    return;
+  if (!gtk_widget_is_sensitive (GTK_WIDGET (combo)))
+    return;
+  id = gtk_combo_box_get_active_id (combo);
+  if (!valid_monitor (id) || qs->display_last == NULL)
+    return;
+  qs->updating = TRUE;
+  modes = parse_modes (qs->display_last, id, &cur);
+  shown = (cur != NULL) ? cur
+          : (modes != NULL ? (const gchar *) modes->data : NULL);
+  fill_combo (qs->mode_combo, modes, shown, "No modes");
+  display_update_sub (qs, id, shown);
+  g_list_free_full (modes, g_free);
+  g_free (cur);
+  qs->updating = FALSE;
+}
+
+static void
+on_mode_changed (GtkComboBox *combo,
+                 gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+  const gchar   *mon;
+  const gchar   *mode;
+  gchar         *qmon;
+  gchar         *qmode;
+  gchar         *cmd;
+
+  if (qs->updating)
+    return;
+  if (!gtk_widget_is_sensitive (GTK_WIDGET (combo)))
+    return;
+  mon = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo));
+  mode = gtk_combo_box_get_active_id (combo);
+  if (!valid_monitor (mon) || !valid_mode (mode))
+    return;
+  qmon = g_shell_quote (mon);
+  qmode = g_shell_quote (mode);
+  cmd = g_strdup_printf ("xrandr --output %s --mode %s", qmon, qmode);
+  g_free (qmon);
+  g_free (qmode);
+  spawn_command (cmd);
+  g_free (cmd);
+  display_update_sub (qs, mon, mode);
+}
+
+static void
+on_scale_changed (GtkComboBox *combo,
+                  gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+  const gchar   *mon;
+  const gchar   *factor;
+  gchar         *qmon;
+  gchar         *cmd;
+
+  if (qs->updating)
+    return;
+  if (!gtk_widget_is_sensitive (GTK_WIDGET (combo)))
+    return;
+  mon = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo));
+  factor = gtk_combo_box_get_active_id (combo);
+  if (!valid_monitor (mon) || !valid_scale (factor))
+    return;
+  qmon = g_shell_quote (mon);
+  cmd = g_strdup_printf ("xrandr --output %s --scale %sx%s",
+                         qmon, factor, factor);
+  g_free (qmon);
+  spawn_command (cmd);
+  g_free (cmd);
+}
+
 /* ---------------- section: build + refresh ---------------- */
 
 static void
@@ -403,6 +857,25 @@ on_night_tile_clicked (GtkButton *button,
 
   (void) button;
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "night");
+}
+
+static void
+on_display_tile_clicked (GtkButton *button,
+                         gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) button;
+  display_load_async (qs);
+  gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "display");
+}
+
+static void
+on_display_back_clicked (GtkButton *button,
+                         gpointer   user_data)
+{
+  (void) button;
+  show_main_page (user_data);
 }
 
 static void
@@ -417,11 +890,15 @@ void
 display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *display_grid = make_group (box, "Display");
-  GtkWidget *night_tile;
-  GtkWidget *night_sub;
+  GtkWidget *tile_box;
   GtkWidget *night_page;
   GtkWidget *preset_box;
   GtkWidget *night_back;
+  GtkWidget *disp_page;
+  GtkWidget *mon_grid;
+  GtkWidget *mode_grid;
+  GtkWidget *scale_grid;
+  GtkWidget *disp_back;
 
   make_slider_row (display_grid, 0, 100, "display-brightness-symbolic",
                    "Screen brightness",
@@ -430,12 +907,23 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   gtk_range_set_range (GTK_RANGE (qs->bright_scale),
                        BRIGHTNESS_MIN, 100.0);
 
+  /* Two half-width tiles sharing one row, like Wi-Fi + Bluetooth. */
+  tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
+  gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
+  gtk_grid_attach (GTK_GRID (display_grid), tile_box, 0, 1, 2, 1);
+
   /* Tile on the main page; presets live on the sub-page. */
-  night_tile = make_nav_tile (box, "weather-clear-night-symbolic",
-                              "Night Light", &night_sub);
-  gtk_label_set_text (GTK_LABEL (night_sub), "Warmer screen colors");
-  g_signal_connect (night_tile, "clicked",
+  qs->night_tile = make_nav_tile (tile_box, "weather-clear-night-symbolic",
+                                  "Night Light", &qs->night_sub);
+  gtk_label_set_text (GTK_LABEL (qs->night_sub), "Warmer screen colors");
+  g_signal_connect (qs->night_tile, "clicked",
                     G_CALLBACK (on_night_tile_clicked), qs);
+
+  qs->display_tile = make_nav_tile (tile_box, "video-display-symbolic",
+                                    "Display", &qs->display_sub);
+  gtk_label_set_text (GTK_LABEL (qs->display_sub), "…");
+  g_signal_connect (qs->display_tile, "clicked",
+                    G_CALLBACK (on_display_tile_clicked), qs);
 
   /* Sub-page with the color temperature presets. */
   night_page = make_sub_page ("Night Light", &night_back);
@@ -457,6 +945,36 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   gtk_stack_add_named (GTK_STACK (stack), night_page, "night");
   g_signal_connect (night_back, "clicked",
                     G_CALLBACK (on_night_back_clicked), qs);
+
+  /* Sub-page with the monitor / resolution / scale selectors. */
+  disp_page = make_sub_page ("Display", &disp_back);
+  mon_grid = make_group (disp_page, "Monitor");
+  qs->mon_combo = make_combo_row (mon_grid, 0, "video-display-symbolic",
+                                  "Monitor");
+  mode_grid = make_group (disp_page, "Resolution");
+  qs->mode_combo = make_combo_row (mode_grid, 0,
+                                   "preferences-desktop-display-symbolic",
+                                   "Resolution");
+  scale_grid = make_group (disp_page, "Scale");
+  qs->scale_combo = make_combo_row (scale_grid, 0,
+                                    "view-fullscreen-symbolic",
+                                    "Display scale");
+  qs->display_status = gtk_label_new (NULL);
+  ui_add_class (qs->display_status, "qs-status");
+  gtk_label_set_line_wrap (GTK_LABEL (qs->display_status), TRUE);
+  gtk_widget_set_halign (qs->display_status, GTK_ALIGN_START);
+  gtk_box_pack_start (GTK_BOX (disp_page), qs->display_status,
+                      FALSE, FALSE, 0);
+  gtk_stack_add_named (GTK_STACK (stack), disp_page, "display");
+  g_signal_connect (disp_back, "clicked",
+                    G_CALLBACK (on_display_back_clicked), qs);
+
+  g_signal_connect (qs->mon_combo, "changed",
+                    G_CALLBACK (on_mon_changed), qs);
+  g_signal_connect (qs->mode_combo, "changed",
+                    G_CALLBACK (on_mode_changed), qs);
+  g_signal_connect (qs->scale_combo, "changed",
+                    G_CALLBACK (on_scale_changed), qs);
 
   g_signal_connect (qs->bright_scale, "value-changed",
                     G_CALLBACK (on_brightness_changed), qs);
@@ -486,4 +1004,18 @@ display_refresh_brightness (QuickSettings *qs)
     }
 
   qs->updating = FALSE;
+}
+
+/* Tile sensitivity + subtitle for external monitors. Without xrandr the
+ * page stays "unavailable"; otherwise (re)probes asynchronously. */
+void
+display_refresh_tile (QuickSettings *qs)
+{
+  if (!command_exists ("xrandr"))
+    {
+      display_unavailable (qs);
+      return;
+    }
+  gtk_widget_set_sensitive (qs->display_tile, TRUE);
+  display_load_async (qs);
 }

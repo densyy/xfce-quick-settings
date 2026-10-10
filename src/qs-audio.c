@@ -669,6 +669,7 @@ void
 audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 {
   GtkWidget *sound_grid = make_group (box, "Sound");
+  GtkWidget *tile_box;
   GtkWidget *audio_tile;
   GtkWidget *audio_page;
   GtkWidget *out_grid;
@@ -680,7 +681,17 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                    &qs->vol_icon, &qs->vol_scale);
   /* Tick mark showing where 100% ends and overamplification begins. */
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
-  audio_tile = make_nav_tile (box, "audio-speakers-symbolic",
+  /* The bottom mark makes this row taller below the trough; keep the
+   * icon (and scale) vertically centered so the icon stays with the bar. */
+  gtk_widget_set_valign (qs->vol_icon, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (qs->vol_scale, GTK_ALIGN_CENTER);
+  /* Tile in a homogeneous grid row like Wi-Fi + Bluetooth (qs-net.c):
+   * packed in the main box it would expand vertically with the popup,
+   * dwarfing the other tiles; nested here it keeps its natural height. */
+  tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
+  gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
+  gtk_grid_attach (GTK_GRID (sound_grid), tile_box, 0, 1, 2, 1);
+  audio_tile = make_nav_tile (tile_box, "audio-speakers-symbolic",
                               "Audio devices", &qs->audio_sub);
   gtk_label_set_text (GTK_LABEL (qs->audio_sub), "…");
   g_signal_connect (audio_tile, "clicked",

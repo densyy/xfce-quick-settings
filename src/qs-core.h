@@ -36,6 +36,16 @@ typedef struct
   GtkWidget       *night_aft;
   GtkWidget       *night_night;
   GtkWidget       *night_dawn;
+  GtkWidget       *night_tile;
+  GtkWidget       *night_sub;
+  GtkWidget       *display_tile;
+  GtkWidget       *display_sub;
+  GtkWidget       *mon_combo;
+  GtkWidget       *mode_combo;
+  GtkWidget       *scale_combo;
+  GtkWidget       *display_status;
+  gchar           *display_last; /* cached "xrandr --query" output */
+  gboolean         display_loading; /* async query in flight */
   GtkWidget       *bat_box;
   GtkWidget       *bat_icon;
   GtkWidget       *bat_label;
