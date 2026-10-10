@@ -127,7 +127,7 @@ sysmon_read_cpu (QuickSettings *qs)
   return CLAMP (percent, 0.0, 100.0);
 }
 
-/* Compact "used/total" for card headers; the percent lives on the bar. */
+/* Compact "used/total" for row headers; the percent lives on the bar. */
 gchar *
 sysmon_bytes_text (guint64 bytes,
                    guint64 total)
@@ -254,67 +254,85 @@ sysmon_read_disks (void)
   return disks;
 }
 
-/* Adwaita ships no memory/cpu symbolic icons: prefer the freedesktop
- * names when the active theme provides them, else use a guaranteed
- * fallback so the card header never shows a broken image. */
-static const gchar *
-resolve_icon (const gchar *preferred,
-              const gchar *fallback)
-{
-  GtkIconTheme *theme = gtk_icon_theme_get_default ();
-
-  if (theme != NULL && gtk_icon_theme_has_icon (theme, preferred))
-    return preferred;
-  return fallback;
-}
-
-#define SYSMON_MEM_ICON_FALLBACK "media-flash-symbolic"
-#define SYSMON_CPU_ICON_FALLBACK "computer-symbolic"
-#define SYSMON_DISK_ICON "drive-harddisk-symbolic"
-
-/* Resource card: header (icon + title + compact value) over a % bar.
- * The value/bar widgets are returned for in-place refresh and also
- * stashed on the card ("qs-sys-value"/"qs-sys-bar") so disk cards can
- * be updated without tracking extra state. */
+/* Resource row: header (title + compact value) over a bar row
+ * [expandable bar + % label at right]. The % lives in its own label
+ * (the bar never shows overlay text). Value/bar/pct widgets are
+ * returned for in-place refresh and also stashed on the row
+ * ("qs-sys-value"/"qs-sys-bar"/"qs-sys-pct") so disk rows can be
+ * updated without tracking extra state. */
 static GtkWidget *
 make_sys_card (GtkWidget   *box,
-               const gchar *icon_name,
                const gchar *title,
                GtkWidget  **value_out,
-               GtkWidget  **bar_out)
+               GtkWidget  **bar_out,
+               GtkWidget  **pct_out)
 {
   GtkWidget *card = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_TIGHT_GAP);
   GtkWidget *head = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
-  GtkWidget *icon = gtk_image_new_from_icon_name (icon_name,
-                                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
   GtkWidget *name = gtk_label_new (title);
   GtkWidget *value = gtk_label_new ("—");
+  GtkWidget *brow = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
   GtkWidget *bar = gtk_progress_bar_new ();
+  GtkWidget *pct = gtk_label_new ("—");
 
-  ui_add_class (card, "qs-card");
-  gtk_container_set_border_width (GTK_CONTAINER (card), QS_CONTENT_PAD);
-  gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
   ui_add_class (name, "qs-title");
   gtk_widget_set_halign (name, GTK_ALIGN_START);
   gtk_widget_set_hexpand (name, TRUE);
   gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
-  ui_add_class (value, "qs-value");
+  ui_add_class (value, "qs-sys-num");
   gtk_widget_set_halign (value, GTK_ALIGN_END);
-  gtk_box_pack_start (GTK_BOX (head), icon, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (head), name, TRUE, TRUE, 0);
   gtk_box_pack_start (GTK_BOX (head), value, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (card), head, FALSE, FALSE, 0);
-  gtk_progress_bar_set_show_text (GTK_PROGRESS_BAR (bar), TRUE);
-  gtk_box_pack_start (GTK_BOX (card), bar, FALSE, FALSE, 0);
+  gtk_progress_bar_set_show_text (GTK_PROGRESS_BAR (bar), FALSE);
+  gtk_widget_set_hexpand (bar, TRUE);
+  gtk_widget_set_halign (bar, GTK_ALIGN_FILL);
+  gtk_widget_set_valign (bar, GTK_ALIGN_CENTER);
+  ui_add_class (pct, "qs-sys-num");
+  gtk_label_set_width_chars (GTK_LABEL (pct), 4);
+  gtk_label_set_xalign (GTK_LABEL (pct), 1.0);
+  gtk_widget_set_halign (pct, GTK_ALIGN_END);
+  gtk_box_pack_start (GTK_BOX (brow), bar, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (brow), pct, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (card), brow, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (box), card, FALSE, FALSE, 0);
   g_object_set_data (G_OBJECT (card), "qs-sys-value", value);
   g_object_set_data (G_OBJECT (card), "qs-sys-bar", bar);
+  g_object_set_data (G_OBJECT (card), "qs-sys-pct", pct);
 
   if (value_out != NULL)
     *value_out = value;
   if (bar_out != NULL)
     *bar_out = bar;
+  if (pct_out != NULL)
+    *pct_out = pct;
   return card;
+}
+
+/* Sets bar fraction + right-side % label from a 0-1 fraction. */
+static void
+sysmon_set_bar (GtkWidget *bar,
+                GtkWidget *pct,
+                gdouble    fraction)
+{
+  gchar *text;
+
+  gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar), fraction);
+  text = g_strdup_printf ("%d%%", (gint) (fraction * 100.0 + 0.5));
+  gtk_label_set_text (GTK_LABEL (pct), text);
+  g_free (text);
+}
+
+/* Horizontal <hr> between rows (never before first / after last). */
+static void
+sysmon_add_separator (GtkWidget *box)
+{
+  GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+
+  ui_add_class (sep, "qs-sep");
+  gtk_widget_set_margin_top (sep, QS_INNER_GAP);
+  gtk_widget_set_margin_bottom (sep, QS_INNER_GAP);
+  gtk_box_pack_start (GTK_BOX (box), sep, FALSE, FALSE, 0);
 }
 
 /* Distinct (physical id, core id) keys for qsort-style dedup. */
@@ -332,7 +350,7 @@ cpu_pair_compare (gconstpointer a,
   return 0;
 }
 
-/* CPU topology ("6C/12T") for the CPU card header value. Physical cores
+/* CPU topology ("6C/12T") for the CPU row header value. Physical cores
  * come from distinct (physical id, core id) pairs in /proc/cpuinfo,
  * threads from sysconf. Computed once and cached: topology never
  * changes at runtime. Falls back to "12T" when cores can't be told
@@ -438,29 +456,21 @@ sysmon_refresh (QuickSettings *qs)
                               used / 1073741824.0, total / 1073741824.0);
       gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
       g_free (text);
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_ram_bar),
-                                     frac);
-      text = g_strdup_printf ("%d%%", (gint) (frac * 100.0 + 0.5));
-      gtk_progress_bar_set_text (GTK_PROGRESS_BAR (qs->sysmon_ram_bar),
-                                 text);
-      g_free (text);
+      sysmon_set_bar (qs->sysmon_ram_bar, qs->sysmon_ram_pct, frac);
     }
   cpu = sysmon_read_cpu (qs);
   if (cpu >= 0.0)
     {
-      /* Header value shows static topology; the bar keeps live % use. */
+      /* Header value shows static topology; the side label keeps live %. */
       gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value),
                           sysmon_cpu_topology_text ());
-      gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar),
-                                     cpu / 100.0);
-      text = g_strdup_printf ("%d%%", (gint) (cpu + 0.5));
-      gtk_progress_bar_set_text (GTK_PROGRESS_BAR (qs->sysmon_cpu_bar),
-                                 text);
-      g_free (text);
+      sysmon_set_bar (qs->sysmon_cpu_bar, qs->sysmon_cpu_pct, cpu / 100.0);
     }
 
   /* Disks: rebuild the blocks only when the device set changed,
-   * otherwise update the values in place. */
+   * otherwise update the values in place. Separators are children of
+   * the same box, so the in-place path skips non-row children and the
+   * rebuild path recreates exactly N-1 separators (clear wipes them). */
   {
     GPtrArray *disks = sysmon_read_disks ();
     GString   *key = g_string_new (NULL);
@@ -479,25 +489,31 @@ sysmon_refresh (QuickSettings *qs)
         GList *l;
         guint  idx = 0;
 
-        for (l = cards; l != NULL && idx < disks->len; l = l->next, idx++)
+        for (l = cards; l != NULL && idx < disks->len; l = l->next)
           {
-            SysmonDisk *d = g_ptr_array_index (disks, idx);
-            GtkWidget  *value = g_object_get_data (G_OBJECT (l->data),
-                                                   "qs-sys-value");
-            GtkWidget  *bar = g_object_get_data (G_OBJECT (l->data),
-                                                 "qs-sys-bar");
+            SysmonDisk *d;
+            GtkWidget  *value;
+            GtkWidget  *bar;
+            GtkWidget  *pct;
 
-            if (value != NULL && bar != NULL
-                && GTK_IS_LABEL (value) && GTK_IS_PROGRESS_BAR (bar))
+            if (g_object_get_data (G_OBJECT (l->data), "qs-sys-bar") == NULL)
+              continue;
+            d = g_ptr_array_index (disks, idx);
+            value = g_object_get_data (G_OBJECT (l->data),
+                                       "qs-sys-value");
+            bar = g_object_get_data (G_OBJECT (l->data),
+                                     "qs-sys-bar");
+            pct = g_object_get_data (G_OBJECT (l->data),
+                                     "qs-sys-pct");
+
+            if (value != NULL && bar != NULL && pct != NULL
+                && GTK_IS_LABEL (value) && GTK_IS_PROGRESS_BAR (bar)
+                && GTK_IS_LABEL (pct))
               {
                 gtk_label_set_text (GTK_LABEL (value), d->text);
-                gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                               d->fraction);
-                text = g_strdup_printf ("%d%%",
-                                        (gint) (d->fraction * 100.0 + 0.5));
-                gtk_progress_bar_set_text (GTK_PROGRESS_BAR (bar), text);
-                g_free (text);
+                sysmon_set_bar (bar, pct, d->fraction);
               }
+            idx++;
           }
         g_list_free (cards);
         g_string_free (key, TRUE);
@@ -521,16 +537,14 @@ sysmon_refresh (QuickSettings *qs)
                 SysmonDisk *d = g_ptr_array_index (disks, i);
                 GtkWidget  *value = NULL;
                 GtkWidget  *bar = NULL;
+                GtkWidget  *pct = NULL;
 
-                make_sys_card (qs->sysmon_disk_box, SYSMON_DISK_ICON,
-                               d->name, &value, &bar);
+                if (i > 0)
+                  sysmon_add_separator (qs->sysmon_disk_box);
+                make_sys_card (qs->sysmon_disk_box,
+                               d->name, &value, &bar, &pct);
                 gtk_label_set_text (GTK_LABEL (value), d->text);
-                gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (bar),
-                                               d->fraction);
-                text = g_strdup_printf ("%d%%",
-                                        (gint) (d->fraction * 100.0 + 0.5));
-                gtk_progress_bar_set_text (GTK_PROGRESS_BAR (bar), text);
-                g_free (text);
+                sysmon_set_bar (bar, pct, d->fraction);
               }
           }
         g_free (qs->sysmon_disk_key);
@@ -611,15 +625,19 @@ sysmon_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (sys_tile, "clicked",
                     G_CALLBACK (on_sysmon_tile_clicked), qs);
 
-  /* One card per resource: header (icon + title + compact value) + bar.
-   * Memory/CPU cards are fixed; disks get one card each under Disks. */
+  /* One row per resource: header (title + compact value) + bar row
+   * [bar + % label]. Memory/CPU rows are fixed; disks get one row
+   * each under Disks. Separators sit between rows only (never before
+   * the first nor after the last). */
   page = make_sub_page ("System", &back);
-  make_sys_card (page, resolve_icon ("memory-symbolic",
-                                     SYSMON_MEM_ICON_FALLBACK),
-                 "Memory", &qs->sysmon_ram_value, &qs->sysmon_ram_bar);
-  make_sys_card (page, resolve_icon ("cpu-symbolic",
-                                     SYSMON_CPU_ICON_FALLBACK),
-                 "CPU", &qs->sysmon_cpu_value, &qs->sysmon_cpu_bar);
+  make_sys_card (page, "Memory",
+                 &qs->sysmon_ram_value, &qs->sysmon_ram_bar,
+                 &qs->sysmon_ram_pct);
+  sysmon_add_separator (page);
+  make_sys_card (page, "CPU",
+                 &qs->sysmon_cpu_value, &qs->sysmon_cpu_bar,
+                 &qs->sysmon_cpu_pct);
+  sysmon_add_separator (page);
   disks_grid = make_group (page, "Disks");
   qs->sysmon_disk_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, QS_SECTION_GAP);
   gtk_grid_attach (GTK_GRID (disks_grid), qs->sysmon_disk_box, 0, 0, 2, 1);

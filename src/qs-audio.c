@@ -702,6 +702,7 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   out_grid = make_group (audio_page, "Output");
   qs->sink_combo = make_device_row (out_grid, 0, "audio-speakers-symbolic",
                                     "Audio output device");
+  ui_add_separator (audio_page);
   in_grid = make_group (audio_page, "Input");
   qs->source_combo = make_device_row (in_grid, 0,
                                       "audio-input-microphone-symbolic",

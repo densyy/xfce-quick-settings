@@ -254,6 +254,19 @@ clear_list_box (GtkWidget *list)
   g_list_free (children);
 }
 
+/* Horizontal <hr> between groups/rows (never before first / after last).
+ * Same pattern as sysmon_add_separator: qs-sep class + 8px top/bottom. */
+void
+ui_add_separator (GtkWidget *box)
+{
+  GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+
+  ui_add_class (sep, "qs-sep");
+  gtk_widget_set_margin_top (sep, QS_INNER_GAP);
+  gtk_widget_set_margin_bottom (sep, QS_INNER_GAP);
+  gtk_box_pack_start (GTK_BOX (box), sep, FALSE, FALSE, 0);
+}
+
 GtkWidget *
 make_placeholder_row (const gchar *text)
 {
@@ -296,10 +309,12 @@ ui_load_css (void)
     ".qs-sub, .qs-status { color: alpha(@theme_fg_color, 0.6);"
     " font-size: smaller; }"
     ".qs-value { font-weight: bold; font-size: larger; }"
+    ".qs-sys-num { font-weight: bold; font-size: 0.85em; }"
     ".qs-back { min-width: 32px; min-height: 32px; padding: 0;"
     " border-radius: 999px; }"
     ".qs-tile, .qs-btn { border-radius: 10px; }"
     ".qs-tile { padding: 6px 8px; }"
+    ".qs-compact { padding: 2px 8px; min-height: 0; }"
     ".qs-btn { min-height: 40px; }"
     ".qs-tile-active, button.qs-tile:checked {"
     " background-color: alpha(@theme_selected_bg_color, 0.22);"
@@ -319,7 +334,10 @@ ui_load_css (void)
     " background-color: @theme_selected_bg_color; border: none; }"
     "scale.qs-slider slider { min-width: 16px; min-height: 16px;"
     " border-radius: 999px; }"
-    ".qs-combo { min-height: 40px; padding-left: 12px; }", -1, NULL);
+    ".qs-combo { min-height: 40px; padding-left: 12px; }"
+    "separator.qs-sep { color: alpha(@theme_fg_color, 0.15);"
+    " background-color: alpha(@theme_fg_color, 0.15);"
+    " background-image: none; min-height: 1px; }", -1, NULL);
   gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
     GTK_STYLE_PROVIDER (provider),
     GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);

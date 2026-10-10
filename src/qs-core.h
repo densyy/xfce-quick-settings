@@ -41,6 +41,7 @@ typedef struct
   GtkWidget       *display_tile;
   GtkWidget       *display_sub;
   GtkWidget       *mon_combo;
+  GtkWidget       *mon_switch; /* monitor on/off toggle (Display page) */
   GtkWidget       *mode_combo;
   GtkWidget       *scale_combo;
   GtkWidget       *display_status;
@@ -55,8 +56,10 @@ typedef struct
   GtkWidget       *notify_clear;
   GtkWidget       *sysmon_ram_value;
   GtkWidget       *sysmon_ram_bar;
+  GtkWidget       *sysmon_ram_pct;
   GtkWidget       *sysmon_cpu_value;
   GtkWidget       *sysmon_cpu_bar;
+  GtkWidget       *sysmon_cpu_pct;
   GtkWidget       *sysmon_disk_box;
   gchar           *sysmon_disk_key; /* rebuild disk blocks only on change */
   guint            sysmon_timer;
