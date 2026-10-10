@@ -79,6 +79,80 @@ position_popup (QuickSettings *qs)
   gtk_window_move (GTK_WINDOW (qs->popup), x, y);
 }
 
+/* TRUE while the pointer is over the panel button (i.e. a focus-out was
+ * caused by pressing the button itself, not by clicking elsewhere). */
+static gboolean
+popup_pointer_on_button (QuickSettings *qs)
+{
+  GdkDisplay    *display;
+  GdkSeat       *seat;
+  GdkDevice     *pointer;
+  GdkWindow     *button_window;
+  GtkAllocation  allocation;
+  gint           x = -1;
+  gint           y = -1;
+
+  if (qs->button == NULL)
+    return FALSE;
+  button_window = gtk_widget_get_window (qs->button);
+  if (button_window == NULL)
+    return FALSE;
+  display = gtk_widget_get_display (qs->button);
+  seat = gdk_display_get_default_seat (display);
+  if (seat == NULL)
+    return FALSE;
+  pointer = gdk_seat_get_pointer (seat);
+  if (pointer == NULL)
+    return FALSE;
+  gdk_window_get_device_position (button_window, pointer, &x, &y, NULL);
+  gtk_widget_get_allocation (qs->button, &allocation);
+  return (x >= 0 && y >= 0 && x < allocation.width && y < allocation.height);
+}
+
+/* Clicking outside the popup moves focus to another toplevel: hide.
+ * Clicks inside only move focus between children, so no event fires.
+ * While an in-process grab is active (combo dropdown open, button being
+ * pressed) the focus change belongs to that interaction: let it finish
+ * instead of hiding underneath it. A focus-out caused by pressing the
+ * panel button is also skipped so "clicked" can toggle normally. */
+static gboolean
+on_popup_focus_out (GtkWidget     *widget,
+                    GdkEventFocus *event,
+                    gpointer       user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) widget;
+  (void) event;
+
+  if (!gtk_widget_get_visible (qs->popup))
+    return FALSE;
+  if (gtk_grab_get_current () != NULL)
+    return FALSE;
+  if (popup_pointer_on_button (qs))
+    return FALSE;
+  gtk_widget_hide (qs->popup);
+  return FALSE;
+}
+
+static gboolean
+on_popup_key_press (GtkWidget   *widget,
+                    GdkEventKey *event,
+                    gpointer     user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) widget;
+
+  if (event->keyval == GDK_KEY_Escape
+      && gtk_widget_get_visible (qs->popup))
+    {
+      gtk_widget_hide (qs->popup);
+      return TRUE;
+    }
+  return FALSE;
+}
+
 static void
 on_button_clicked (GtkButton *button,
                    gpointer   user_data)
@@ -164,6 +238,13 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_window_set_skip_pager_hint (GTK_WINDOW (qs->popup), TRUE);
   gtk_window_set_keep_above (GTK_WINDOW (qs->popup), TRUE);
   gtk_window_set_type_hint (GTK_WINDOW (qs->popup), GDK_WINDOW_TYPE_HINT_POPUP_MENU);
+  gtk_window_set_accept_focus (GTK_WINDOW (qs->popup), TRUE);
+  gtk_window_set_focus_on_map (GTK_WINDOW (qs->popup), TRUE);
+  gtk_widget_add_events (qs->popup, GDK_FOCUS_CHANGE_MASK | GDK_KEY_PRESS_MASK);
+  g_signal_connect (qs->popup, "focus-out-event",
+                    G_CALLBACK (on_popup_focus_out), qs);
+  g_signal_connect (qs->popup, "key-press-event",
+                    G_CALLBACK (on_popup_key_press), qs);
   gtk_widget_set_size_request (qs->popup, 320, -1);
 
   qs->stack = gtk_stack_new ();

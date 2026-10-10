@@ -4,6 +4,13 @@
 #include <sqlite3.h>
 
 #define NOTIFY_MAX_ROWS 30
+/* Live refresh: dir monitor (sqlite uses rename/journal, so the file
+ * itself can't be watched reliably) + 3s poll fallback while visible. */
+#define NOTIFY_POLL_S 3
+#define NOTIFY_DEBOUNCE_MS 500
+#define NOTIFY_DATA_MON "qs-notify-monitor"
+#define NOTIFY_DATA_POLL "qs-notify-poll"
+#define NOTIFY_DATA_DEB "qs-notify-debounce"
 
 /* One row from the xfce4-notifyd log. */
 typedef struct
@@ -75,7 +82,8 @@ list_notices (void)
   sqlite3_busy_timeout (db, 1000);
   g_free (path);
   if (sqlite3_prepare_v2 (db,
-                          "SELECT app_name, summary, body, timestamp "
+                           /* No urgency filter: critical and normal appear alike. */
+                           "SELECT app_name, summary, body, timestamp "
                           "FROM notifications "
                           "ORDER BY timestamp DESC LIMIT ?;",
                           -1, &stmt, NULL) != SQLITE_OK)
@@ -255,6 +263,172 @@ notify_update_tile (QuickSettings *qs)
     }
 }
 
+/* Refreshes tile always, list only when the "notices" page is showing.
+ * No-ops while the popup is hidden or the plugin is dead. */
+static void
+notify_refresh_visible (QuickSettings *qs)
+{
+  const gchar *name;
+
+  if (qs->dead || !gtk_widget_get_visible (qs->popup))
+    return;
+  notify_update_tile (qs);
+  name = gtk_stack_get_visible_child_name (GTK_STACK (qs->stack));
+  if (g_strcmp0 (name, "notices") == 0)
+    notify_fill_list (qs);
+}
+
+static gboolean
+notify_debounce_fire (gpointer data)
+{
+  QuickSettings *qs = data;
+
+  g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_DEB,
+                     GUINT_TO_POINTER (0));
+  notify_refresh_visible (qs);
+  return G_SOURCE_REMOVE;
+}
+
+/* Coalesces bursts of monitor events (one sqlite commit emits several)
+ * into a single refresh ~500ms after the first event. */
+static void
+notify_schedule_refresh (QuickSettings *qs)
+{
+  guint id;
+
+  if (g_object_get_data (G_OBJECT (qs->popup), NOTIFY_DATA_DEB) != NULL)
+    return;
+  id = g_timeout_add (NOTIFY_DEBOUNCE_MS, notify_debounce_fire, qs);
+  g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_DEB,
+                     GUINT_TO_POINTER (id));
+}
+
+static void
+notify_unschedule_refresh (QuickSettings *qs)
+{
+  gpointer p = g_object_get_data (G_OBJECT (qs->popup), NOTIFY_DATA_DEB);
+
+  if (p != NULL)
+    {
+      g_source_remove (GPOINTER_TO_UINT (p));
+      g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_DEB,
+                         GUINT_TO_POINTER (0));
+    }
+}
+
+static void
+on_notify_dir_changed (GFileMonitor      *monitor,
+                       GFile             *file,
+                       GFile             *other,
+                       GFileMonitorEvent  event,
+                       gpointer           user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) monitor;
+  (void) file;
+  (void) other;
+  (void) event;
+  if (qs->dead || !gtk_widget_get_visible (qs->popup))
+    return;
+  notify_schedule_refresh (qs);
+}
+
+/* Poll fallback: only ever runs while the popup is visible (started on
+ * "show", stopped on "hide"); self-removes as a backup. */
+static gboolean
+notify_poll_tick (gpointer data)
+{
+  QuickSettings *qs = data;
+
+  if (qs->dead || !gtk_widget_get_visible (qs->popup))
+    {
+      g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
+                         GUINT_TO_POINTER (0));
+      return G_SOURCE_REMOVE;
+    }
+  notify_refresh_visible (qs);
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+notify_poll_start (QuickSettings *qs)
+{
+  guint id;
+
+  if (qs->dead
+      || g_object_get_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL) != NULL)
+    return;
+  id = g_timeout_add_seconds (NOTIFY_POLL_S, notify_poll_tick, qs);
+  g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
+                     GUINT_TO_POINTER (id));
+}
+
+static void
+notify_poll_stop (QuickSettings *qs)
+{
+  gpointer p = g_object_get_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL);
+
+  if (p != NULL)
+    {
+      g_source_remove (GPOINTER_TO_UINT (p));
+      g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
+                         GUINT_TO_POINTER (0));
+    }
+}
+
+static void
+on_notify_stack_child (GObject    *stack,
+                       GParamSpec *pspec,
+                       gpointer    user_data)
+{
+  QuickSettings *qs = user_data;
+  const gchar *name;
+
+  (void) pspec;
+  name = gtk_stack_get_visible_child_name (GTK_STACK (stack));
+  if (g_strcmp0 (name, "notices") == 0 && !qs->dead)
+    notify_fill_list (qs);
+}
+
+static void
+on_notify_popup_show (GtkWidget *widget,
+                      gpointer   user_data)
+{
+  (void) widget;
+  notify_poll_start (user_data);
+}
+
+static void
+on_notify_popup_hide (GtkWidget *widget,
+                      gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) widget;
+  notify_poll_stop (qs);
+  notify_unschedule_refresh (qs);
+}
+
+/* Cancels monitor + sources before qs is freed (hide already stopped
+ * the poll, but the monitor and a pending debounce outlive visibility). */
+static void
+on_notify_popup_destroy (GtkWidget *widget,
+                         gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+  GFileMonitor *mon;
+
+  notify_poll_stop (qs);
+  notify_unschedule_refresh (qs);
+  mon = g_object_steal_data (G_OBJECT (widget), NOTIFY_DATA_MON);
+  if (mon != NULL)
+    {
+      g_file_monitor_cancel (mon);
+      g_object_unref (mon);
+    }
+}
+
 static void
 on_notify_clear_clicked (GtkButton *button,
                          gpointer   user_data)
@@ -294,8 +468,11 @@ static void
 on_notify_back_clicked (GtkButton *button,
                         gpointer   user_data)
 {
+  QuickSettings *qs = user_data;
+
   (void) button;
-  show_main_page (user_data);
+  notify_update_tile (qs);
+  show_main_page (qs);
 }
 
 void
@@ -305,6 +482,9 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   GtkWidget *page;
   GtkWidget *scroll;
   GtkWidget *back;
+  gchar *mon_dir;
+  GFile *mon_file;
+  GFileMonitor *mon;
 
   /* Mini tile in the shared action grid. */
   notify_tile = make_mini_tile (box, "preferences-system-notifications-symbolic",
@@ -333,4 +513,31 @@ notify_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   gtk_stack_add_named (GTK_STACK (stack), page, "notices");
   g_signal_connect (back, "clicked",
                     G_CALLBACK (on_notify_back_clicked), qs);
+  /* Refill whenever the history page becomes visible (covers entering
+   * it from anywhere, not just the tile click above). */
+  g_signal_connect (stack, "notify::visible-child-name",
+                    G_CALLBACK (on_notify_stack_child), qs);
+  /* Poll fallback runs only while the popup is open (same hide signal
+   * that stops power/sysmon); monitor below covers the live part. */
+  g_signal_connect (qs->popup, "show",
+                    G_CALLBACK (on_notify_popup_show), qs);
+  g_signal_connect (qs->popup, "hide",
+                    G_CALLBACK (on_notify_popup_hide), qs);
+  g_signal_connect (qs->popup, "destroy",
+                    G_CALLBACK (on_notify_popup_destroy), qs);
+  /* Watch the notifyd dir, not log.sqlite: sqlite commits land via
+   * journal/rename, so the file identity changes underneath us. */
+  mon_dir = g_build_filename (g_get_user_cache_dir (), "xfce4",
+                              "notifyd", NULL);
+  mon_file = g_file_new_for_path (mon_dir);
+  mon = g_file_monitor_directory (mon_file, G_FILE_MONITOR_NONE, NULL, NULL);
+  if (mon != NULL)
+    {
+      g_signal_connect (mon, "changed",
+                        G_CALLBACK (on_notify_dir_changed), qs);
+      g_object_set_data_full (G_OBJECT (qs->popup), NOTIFY_DATA_MON, mon,
+                              g_object_unref);
+    }
+  g_object_unref (mon_file);
+  g_free (mon_dir);
 }

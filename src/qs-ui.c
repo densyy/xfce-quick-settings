@@ -315,7 +315,7 @@ ui_load_css (void)
     " background-color: @theme_selected_bg_color; border: none; }"
     "scale.qs-slider slider { min-width: 16px; min-height: 16px;"
     " border-radius: 999px; }"
-    ".qs-combo { min-height: 40px; }", -1, NULL);
+    ".qs-combo { min-height: 40px; padding-left: 12px; }", -1, NULL);
   gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
     GTK_STYLE_PROVIDER (provider),
     GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
