@@ -3,6 +3,10 @@
 Plugin de configurações rápidas para o XFCE Panel, escrito em C com GTK3.
 Exibe um popup com controles de áudio, brilho, rede, energia, sessão e sistema.
 
+## Captura de tela
+
+![Quick Settings popup](docs/images/screenshot.png)
+
 ## Funcionalidades
 
 - Áudio: controle de volume e mudo.
