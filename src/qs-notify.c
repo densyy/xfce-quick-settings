@@ -1,6 +1,7 @@
 #include "qs-notify.h"
 #include "qs-ui.h"
-#include "qs-util.h"
+
+#include <sqlite3.h>
 
 #define NOTIFY_MAX_ROWS 30
 
@@ -24,83 +25,96 @@ notice_free (gpointer data)
   g_free (n);
 }
 
-/* Path to the xfce4-notifyd history database (may not exist). */
+/* Path to the xfce4-notifyd history database (may not exist).
+ * Uses XDG cache dir (usually ~/.cache), not hardcoded HOME/.cache. */
 static gchar *
 notify_db_path (void)
 {
-  return g_build_filename (g_get_home_dir (), ".cache", "xfce4",
+  return g_build_filename (g_get_user_cache_dir (), "xfce4",
                            "notifyd", "log.sqlite", NULL);
 }
 
-/* Newest first, or NULL when sqlite3/the log is missing. */
+/* Flattens newlines: the list splits rows on '\n', so embedded
+ * newlines would corrupt parsing (fixed via SQL before, now in C). */
+static gchar *
+flat_text (const unsigned char *src)
+{
+  gchar *s;
+
+  if (src == NULL)
+    return g_strdup ("");
+  s = g_strdup ((const gchar *) src);
+  g_strdelimit (s, "\r\n\x1f", ' ');
+  return s;
+}
+
+/* Newest first, or NULL when the log is missing/unreadable.
+ * Reads via libsqlite3 directly: no sqlite3 CLI dependency and no
+ * separator-quoting fragility ('\x1f' via CLI never matched the C
+ * split, so the list was always empty). */
 static GList *
 list_notices (void)
 {
-  gchar  *path = notify_db_path ();
-  gchar  *quoted;
-  gchar  *cmd;
-  gchar  *output;
-  gchar **lines;
-  GList  *notices = NULL;
-  gint    i;
+  gchar     *path = notify_db_path ();
+  sqlite3   *db = NULL;
+  sqlite3_stmt *stmt = NULL;
+  GList     *notices = NULL;
 
-  if (!command_exists ("sqlite3")
-      || !g_file_test (path, G_FILE_TEST_EXISTS))
+  if (!g_file_test (path, G_FILE_TEST_EXISTS))
     {
       g_free (path);
       return NULL;
     }
-  quoted = g_shell_quote (path);
-  /* Newlines inside summary/body would split rows when parsing below,
-   * so flatten them in SQL (the list stays newest-first, up to 30). */
-  cmd = g_strdup_printf ("sqlite3 -separator '\x1f' %s \"SELECT app_name, "
-                         "replace(summary, char(10), ' '), "
-                         "replace(body, char(10), ' '), timestamp "
-                         "FROM notifications "
-                         "ORDER BY timestamp DESC LIMIT %d;\"",
-                         quoted, NOTIFY_MAX_ROWS);
-  g_free (quoted);
-  g_free (path);
-  output = run_command (cmd);
-  g_free (cmd);
-  if (output == NULL)
-    return NULL;
-  lines = g_strsplit (output, "\n", -1);
-  g_free (output);
-  for (i = 0; lines[i] != NULL; i++)
+  if (sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
     {
-      gchar  **fields;
-      Notice  *n;
+      g_free (path);
+      if (db != NULL)
+        sqlite3_close (db);
+      return NULL;
+    }
+  sqlite3_busy_timeout (db, 1000);
+  g_free (path);
+  if (sqlite3_prepare_v2 (db,
+                          "SELECT app_name, summary, body, timestamp "
+                          "FROM notifications "
+                          "ORDER BY timestamp DESC LIMIT ?;",
+                          -1, &stmt, NULL) != SQLITE_OK)
+    {
+      sqlite3_close (db);
+      return NULL;
+    }
+  sqlite3_bind_int (stmt, 1, NOTIFY_MAX_ROWS);
+  while (sqlite3_step (stmt) == SQLITE_ROW)
+    {
+      Notice *n = g_new0 (Notice, 1);
 
-      if (lines[i][0] == '\0')
-        continue;
-      fields = g_strsplit (lines[i], "\x1f", 4);
-      if (g_strv_length (fields) < 4)
-        {
-          g_strfreev (fields);
-          continue;
-        }
-      n = g_new0 (Notice, 1);
-      n->app = g_strdup (fields[0]);
-      n->summary = g_strdup (fields[1]);
-      n->body = g_strdup (fields[2]);
-      n->timestamp = g_ascii_strtoll (fields[3], NULL, 10);
-      g_strfreev (fields);
+      n->app = flat_text (sqlite3_column_text (stmt, 0));
+      n->summary = flat_text (sqlite3_column_text (stmt, 1));
+      n->body = flat_text (sqlite3_column_text (stmt, 2));
+      /* xfce4-notifyd stores microseconds since epoch (see
+       * xfce-notify-log.c: unix * 1e6 + usec), not seconds. */
+      n->timestamp = sqlite3_column_int64 (stmt, 3);
       notices = g_list_append (notices, n);
     }
-  g_strfreev (lines);
+  sqlite3_finalize (stmt);
+  sqlite3_close (db);
   return notices;
 }
 
-/* "14:32" for today, "09/10 14:32" otherwise. */
+/* "14:32" for today, "09/10 14:32" otherwise.
+ * xfce4-notifyd stores microseconds; old DBs may store seconds.
+ * Heuristic: values below 4102444800 (2100-01-01 em segundos)
+ * são tratados como segundos. */
 static gchar *
-notice_time (gint64 timestamp)
+notice_time (gint64 timestamp_usec)
 {
+  gint64 timestamp = (timestamp_usec < 4102444800LL)
+                     ? timestamp_usec : timestamp_usec / 1000000;
   g_autoptr (GDateTime) dt = g_date_time_new_from_unix_local (timestamp);
   g_autoptr (GDateTime) now = g_date_time_new_now_local ();
   gint year, month, day;
 
-  if (dt == NULL)
+  if (dt == NULL || now == NULL)
     return g_strdup ("");
   g_date_time_get_ymd (now, &year, &month, &day);
   if (g_date_time_get_year (dt) == year
@@ -120,9 +134,9 @@ make_notice_row (Notice *n)
   GtkWidget *title;
   GtkWidget *time_label;
   GtkWidget *sub;
-  gchar     *esc;
   gchar     *time;
   gchar     *sub_text;
+  const gchar *title_text;
 
   ui_add_class (row, "qs-card");
   gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
@@ -131,11 +145,13 @@ make_notice_row (Notice *n)
   gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
   gtk_container_set_border_width (GTK_CONTAINER (vbox), QS_CONTENT_PAD);
 
-  /* Bold summary with the time pinned to the right. */
-  esc = g_markup_escape_text (n->summary != NULL && *n->summary != '\0'
-                              ? n->summary : n->app, -1);
-  title = gtk_label_new (*esc != '\0' ? esc : "Notification");
-  g_free (esc);
+  /* Bold summary with the time pinned to the right.
+   * Plain text (no markup escape): GtkLabel shows text literally,
+   * so pre-escaped "&amp;" would leak to the UI. */
+  title_text = (n->summary != NULL && *n->summary != '\0')
+               ? n->summary
+               : (n->app != NULL && *n->app != '\0' ? n->app : "Notification");
+  title = gtk_label_new (title_text);
   ui_add_class (title, "qs-title");
   gtk_widget_set_halign (title, GTK_ALIGN_START);
   gtk_widget_set_hexpand (title, TRUE);
@@ -150,11 +166,7 @@ make_notice_row (Notice *n)
 
   if (n->body != NULL && *n->body != '\0')
     {
-      GtkWidget *body = gtk_label_new (NULL);
-
-      esc = g_markup_escape_text (n->body, -1);
-      gtk_label_set_text (GTK_LABEL (body), esc);
-      g_free (esc);
+      GtkWidget *body = gtk_label_new (n->body);
       gtk_widget_set_halign (body, GTK_ALIGN_START);
       gtk_label_set_line_wrap (GTK_LABEL (body), TRUE);
       gtk_label_set_lines (GTK_LABEL (body), 3);
@@ -213,27 +225,24 @@ notify_fill_list (QuickSettings *qs)
 void
 notify_update_tile (QuickSettings *qs)
 {
-  gchar *path = notify_db_path ();
-  gchar *quoted;
-  gchar *cmd;
-  gchar *output;
-  gint   count = -1;
+  gchar  *path = notify_db_path ();
+  sqlite3 *db = NULL;
+  sqlite3_stmt *stmt = NULL;
+  gint    count = -1;
 
-  if (command_exists ("sqlite3")
-      && g_file_test (path, G_FILE_TEST_EXISTS))
+  if (g_file_test (path, G_FILE_TEST_EXISTS)
+      && sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK)
     {
-      quoted = g_shell_quote (path);
-      cmd = g_strdup_printf ("sqlite3 %s \"SELECT COUNT(*) "
-                             "FROM notifications;\"", quoted);
-      g_free (quoted);
-      output = run_command (cmd);
-      g_free (cmd);
-      if (output != NULL)
-        {
-          count = atoi (g_strstrip (output));
-          g_free (output);
-        }
+      sqlite3_busy_timeout (db, 1000);
+      if (sqlite3_prepare_v2 (db, "SELECT COUNT(*) FROM notifications;",
+                              -1, &stmt, NULL) == SQLITE_OK
+          && sqlite3_step (stmt) == SQLITE_ROW)
+        count = sqlite3_column_int (stmt, 0);
     }
+  if (stmt != NULL)
+    sqlite3_finalize (stmt);
+  if (db != NULL)
+    sqlite3_close (db);
   g_free (path);
   if (count <= 0)
     gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
@@ -252,21 +261,19 @@ on_notify_clear_clicked (GtkButton *button,
 {
   QuickSettings *qs = user_data;
   gchar *path = notify_db_path ();
-  gchar *quoted;
-  gchar *cmd;
-  gchar *output;
+  sqlite3 *db = NULL;
 
   (void) button;
-  if (command_exists ("sqlite3")
-      && g_file_test (path, G_FILE_TEST_EXISTS))
+  if (g_file_test (path, G_FILE_TEST_EXISTS))
     {
-      quoted = g_shell_quote (path);
-      cmd = g_strdup_printf ("sqlite3 %s \"DELETE FROM notifications;\"",
-                             quoted);
-      g_free (quoted);
-      output = run_command (cmd);
-      g_free (cmd);
-      g_free (output);
+      if (sqlite3_open (path, &db) == SQLITE_OK)
+        {
+          sqlite3_busy_timeout (db, 1000);
+          sqlite3_exec (db, "DELETE FROM notifications;", NULL, NULL, NULL);
+          sqlite3_close (db);
+        }
+      else if (db != NULL)
+        sqlite3_close (db);
     }
   g_free (path);
   notify_fill_list (qs);

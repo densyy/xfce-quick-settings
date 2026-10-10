@@ -3,16 +3,68 @@
 #include "qs-util.h"
 
 /* ---------------- brightness backend ----------------
- * brightnessctl > sysfs > xbacklight > xrandr */
+ * brightnessctl > sysfs > xbacklight > xrandr
+ * Piso anti-tela-preta: 0% apaga backlight/gamma (irrecuperável sem
+ * ver a tela). Setter e slider nunca descem abaixo de MIN.
+ * xrandr é gamma software: Fn não recupera, então tem piso próprio
+ * maior e nunca é usado quando há backlight real. */
+#define BRIGHTNESS_MIN 5
+#define BRIGHTNESS_MIN_XRANDR 30
+
+/* Melhor device em /sys/class/backlight, ou NULL (caller frees).
+ * Descarta max<=0; prefere driver nativo (intel/amdgpu/nv) a acpi_video*. */
+static gchar *
+pick_backlight_device (void)
+{
+  GDir *dir = g_dir_open ("/sys/class/backlight", 0, NULL);
+  const gchar *e;
+  gchar *best = NULL;
+  gint best_score = -1;
+
+  if (dir == NULL)
+    return NULL;
+  while ((e = g_dir_read_name (dir)) != NULL)
+    {
+      gchar *mp = g_build_filename ("/sys/class/backlight", e,
+                                    "max_brightness", NULL);
+      gchar *c = NULL;
+      gint maxv = 0;
+      gint score;
+
+      if (g_file_get_contents (mp, &c, NULL, NULL))
+        {
+          maxv = atoi (c);
+          g_free (c);
+        }
+      g_free (mp);
+      if (maxv <= 0)
+        continue;
+      if (g_str_has_prefix (e, "intel_backlight")
+          || strstr (e, "amdgpu") != NULL
+          || strstr (e, "nvidia") != NULL
+          || g_str_has_prefix (e, "nv_"))
+        score = 2;
+      else if (g_str_has_prefix (e, "acpi_video"))
+        score = 0;
+      else
+        score = 1;
+      if (score > best_score)
+        {
+          g_free (best);
+          best = g_strdup (e);
+          best_score = score;
+        }
+    }
+  g_dir_close (dir);
+  return best;
+}
 
 static gint
 get_brightness_percent (void)
 {
   gchar       *output;
-  gchar      **parts;
   gint         value = -1;
-  GDir        *dir;
-  const gchar *entry;
+  gchar       *dev;
   gchar       *bright_path;
   gchar       *max_path;
   gchar       *contents = NULL;
@@ -22,47 +74,51 @@ get_brightness_percent (void)
 
   if (command_exists ("brightnessctl"))
     {
+      /* -m é multi-linha quando há 2 devices; parse_first_percent pega
+       * o primeiro "NN%" (primeiro device backlight). Tenta com -c,
+       * depois sem -c (brightnessctl antigo sem flag -c). */
+      output = run_command ("brightnessctl -c backlight -m");
+      if (output != NULL)
+        {
+          value = parse_first_percent (output);
+          g_free (output);
+          if (value >= 0)
+            return CLAMP (value, 0, 100);
+        }
       output = run_command ("brightnessctl -m");
       if (output != NULL)
         {
-          parts = g_strsplit (output, ",", 5);
-          if (g_strv_length (parts) > 3)
-            value = parse_first_percent (parts[3]);
-          g_strfreev (parts);
+          value = parse_first_percent (output);
           g_free (output);
           if (value >= 0)
             return CLAMP (value, 0, 100);
         }
     }
 
-  dir = g_dir_open ("/sys/class/backlight", 0, NULL);
-  if (dir != NULL)
+  dev = pick_backlight_device ();
+  if (dev != NULL)
     {
-      entry = g_dir_read_name (dir);
-      if (entry != NULL)
+      bright_path = g_build_filename ("/sys/class/backlight", dev,
+                                       "brightness", NULL);
+      max_path = g_build_filename ("/sys/class/backlight", dev,
+                                    "max_brightness", NULL);
+      if (g_file_get_contents (bright_path, &contents, NULL, NULL))
         {
-          bright_path = g_build_filename ("/sys/class/backlight", entry,
-                                           "brightness", NULL);
-          max_path = g_build_filename ("/sys/class/backlight", entry,
-                                        "max_brightness", NULL);
-          if (g_file_get_contents (bright_path, &contents, NULL, NULL))
+          brightness = atoi (contents);
+          g_free (contents);
+          contents = NULL;
+          if (g_file_get_contents (max_path, &contents, NULL, NULL))
             {
-              brightness = atoi (contents);
+              max_brightness = atoi (contents);
               g_free (contents);
               contents = NULL;
-              if (g_file_get_contents (max_path, &contents, NULL, NULL))
-                {
-                  max_brightness = atoi (contents);
-                  g_free (contents);
-                  contents = NULL;
-                  if (max_brightness > 0)
-                    value = brightness * 100 / max_brightness;
-                }
+              if (max_brightness > 0)
+                value = brightness * 100 / max_brightness;
             }
-          g_free (bright_path);
-          g_free (max_path);
         }
-      g_dir_close (dir);
+      g_free (bright_path);
+      g_free (max_path);
+      g_free (dev);
       if (value >= 0)
         return CLAMP (value, 0, 100);
     }
@@ -128,55 +184,82 @@ static void
 set_brightness_percent (gint value)
 {
   gchar       *cmd;
-  GDir        *dir;
-  const gchar *entry;
+  gchar       *dev;
   gchar       *bright_path;
   gchar       *max_path;
   gchar       *contents = NULL;
   gint         max_brightness;
   gboolean     handled = FALSE;
+  gboolean     has_backlight = FALSE;
   gchar       *name;
 
-  value = CLAMP (value, 0, 100);
+  value = CLAMP (value, BRIGHTNESS_MIN, 100);
 
   if (command_exists ("brightnessctl"))
     {
-      cmd = g_strdup_printf ("brightnessctl set %d%%", value);
+      /* Mesmo comando que o script de teste (provado na sua máquina),
+       * mas mirando o mesmo device do getter (intel > acpi_video*).
+       * Async como o botão de volume: não trava o painel.
+       * Caminho absoluto: o PATH do painel pode ser mínimo. */
+      gchar *target = pick_backlight_device ();
+      gchar *bin = g_find_program_in_path ("brightnessctl");
+
+      if (target != NULL && bin != NULL)
+        {
+          /* Nomes de device são [A-Za-z0-9_+-]: sem quote, sem
+           * risco de parse do g_spawn_command_line_async. */
+          cmd = g_strdup_printf ("%s -d %s set %d%%", bin, target, value);
+          g_free (target);
+          g_free (bin);
+        }
+      else
+        {
+          g_free (target);
+          if (bin != NULL)
+            {
+              cmd = g_strdup_printf ("%s set %d%%", bin, value);
+              g_free (bin);
+            }
+          else
+            {
+              cmd = g_strdup_printf ("brightnessctl set %d%%", value);
+            }
+        }
       spawn_command (cmd);
       g_free (cmd);
       return;
     }
 
-  dir = g_dir_open ("/sys/class/backlight", 0, NULL);
-  if (dir != NULL)
+  dev = pick_backlight_device ();
+  if (dev != NULL)
     {
-      entry = g_dir_read_name (dir);
-      if (entry != NULL)
+      has_backlight = TRUE;
+      max_path = g_build_filename ("/sys/class/backlight", dev,
+                                    "max_brightness", NULL);
+      if (g_file_get_contents (max_path, &contents, NULL, NULL))
         {
-          max_path = g_build_filename ("/sys/class/backlight", entry,
-                                        "max_brightness", NULL);
-          if (g_file_get_contents (max_path, &contents, NULL, NULL))
+          max_brightness = atoi (contents);
+          g_free (contents);
+          contents = NULL;
+          if (max_brightness > 0)
             {
-              max_brightness = atoi (contents);
-              g_free (contents);
-              contents = NULL;
-              if (max_brightness > 0)
-                {
-                  bright_path = g_build_filename ("/sys/class/backlight",
-                                                   entry, "brightness", NULL);
-                  cmd = g_strdup_printf ("%d", value * max_brightness / 100);
-                  g_file_set_contents (bright_path, cmd, -1, NULL);
-                  g_free (cmd);
-                  g_free (bright_path);
-                  handled = TRUE;
-                }
+              bright_path = g_build_filename ("/sys/class/backlight",
+                                               dev, "brightness", NULL);
+              cmd = g_strdup_printf ("%d", value * max_brightness / 100);
+              /* Direct sysfs write needs root: only claim handled
+               * on success, otherwise fall through to
+               * xbacklight/xrandr instead of silently doing nothing. */
+              if (g_file_set_contents (bright_path, cmd, -1, NULL))
+                handled = TRUE;
+              g_free (cmd);
+              g_free (bright_path);
             }
-          g_free (max_path);
         }
-      g_dir_close (dir);
-      if (handled)
-        return;
+      g_free (max_path);
+      g_free (dev);
     }
+  if (handled)
+    return;
 
   if (command_exists ("xbacklight"))
     {
@@ -186,16 +269,19 @@ set_brightness_percent (gint value)
       return;
     }
 
-  if (command_exists ("xrandr"))
+  if (!has_backlight && command_exists ("xrandr"))
     {
+      /* Sem backlight real (desktop): gamma é a única opção.
+       * Piso alto: 0.05 parece apagado e assusta. */
+      value = MAX (value, BRIGHTNESS_MIN_XRANDR);
       name = get_xrandr_output ();
       if (name != NULL)
         {
-          if (value >= 100)
-            cmd = g_strdup_printf ("xrandr --output %s --brightness 1.0", name);
-          else
-            cmd = g_strdup_printf ("xrandr --output %s --brightness 0.%02d",
-                                   name, value);
+          gchar *qname = g_shell_quote (name);
+
+          cmd = g_strdup_printf ("xrandr --output %s --brightness %.2f",
+                                 qname, value / 100.0);
+          g_free (qname);
           spawn_command (cmd);
           g_free (cmd);
           g_free (name);
@@ -211,9 +297,12 @@ on_brightness_changed (GtkRange *range,
 
   if (qs->updating)
     return;
+  if (!gtk_widget_is_sensitive (GTK_WIDGET (range)))
+    return;
   value = (gint) (gtk_range_get_value (range) + 0.5);
   set_brightness_percent (value);
 }
+
 /* ---------------- night light (redshift > gammastep) ---------------- */
 
 static gboolean
@@ -337,6 +426,9 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   make_slider_row (display_grid, 0, 100, "display-brightness-symbolic",
                    "Screen brightness",
                    NULL, &qs->bright_scale);
+  /* Piso visual igual ao do setter: impede arrastar até 0% (preto). */
+  gtk_range_set_range (GTK_RANGE (qs->bright_scale),
+                       BRIGHTNESS_MIN, 100.0);
 
   /* Tile on the main page; presets live on the sub-page. */
   night_tile = make_nav_tile (box, "weather-clear-night-symbolic",
@@ -380,7 +472,10 @@ display_refresh_brightness (QuickSettings *qs)
   brightness = get_brightness_percent ();
   if (brightness >= 0)
     {
-      gtk_range_set_value (GTK_RANGE (qs->bright_scale), brightness);
+      /* Se o sistema está abaixo do piso (ex: zerado por fora),
+       * mostra o piso: mover o slider já recupera para >= MIN. */
+      gtk_range_set_value (GTK_RANGE (qs->bright_scale),
+                           CLAMP (brightness, BRIGHTNESS_MIN, 100));
       gtk_widget_set_sensitive (qs->bright_scale, TRUE);
       gtk_widget_set_tooltip_text (qs->bright_scale, "Screen brightness");
     }

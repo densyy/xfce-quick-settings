@@ -9,18 +9,21 @@ LIBDIR ?= $(shell $(PKG_CONFIG) --variable=libdir libxfce4panel-2.0)
 PANEL_PLUGIN_DIR ?= $(LIBDIR)/xfce4/panel/plugins
 PANEL_DESKTOP_DIR ?= $(PREFIX)/share/xfce4/panel/plugins
 
-CFLAGS += -Wall -Wextra -fPIC -O2
-CFLAGS += $(shell $(PKG_CONFIG) --cflags gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0)
-LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0)
+CFLAGS += -Wall -Wextra -fPIC -O2 -MMD -MP
+CFLAGS += $(shell $(PKG_CONFIG) --cflags gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0 sqlite3)
+LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0) -lsqlite3
 
 SRC = src/qs-plugin.c src/qs-util.c src/qs-ui.c src/qs-audio.c \
       src/qs-display.c src/qs-net.c src/qs-power.c src/qs-session.c \
       src/qs-notify.c src/qs-sysmon.c
 OBJ = $(SRC:.c=.o)
+DEP = $(SRC:.c=.d)
 
 .PHONY: all clean install uninstall
 
 all: $(TARGET)
+
+-include $(DEP)
 
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -shared -o $@ $(OBJ) $(LDLIBS)
@@ -36,4 +39,4 @@ uninstall:
 	rm -f "$(DESTDIR)$(PANEL_DESKTOP_DIR)/quicksettings.desktop"
 
 clean:
-	rm -f "$(TARGET)" $(OBJ)
+	rm -f "$(TARGET)" $(OBJ) $(DEP)
