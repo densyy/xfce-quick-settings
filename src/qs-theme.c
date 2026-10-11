@@ -12,6 +12,7 @@ qs_theme_load (void)
     return;
   provider = gtk_css_provider_new ();
   gtk_css_provider_load_from_data (provider,
+    ".qs-popup { background-color: @theme_bg_color; }"
     ".qs-section { font-weight: bold; font-size: smaller;"
     " color: alpha(@theme_fg_color, 0.6); }"
     ".qs-page-title { font-weight: bold; font-size: larger; }"

@@ -140,6 +140,27 @@ on_button_clicked (GtkButton *button,
   /* Show IMEDIATO: nada bloqueante antes deste ponto. */
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
   gtk_widget_show_all (qs->popup);
+  /* Anti-flash (sem compositor): a janela X11 é mapeada pelo show_all
+   * antes do primeiro draw, então o framebuffer velho (lixo/espelho da
+   * janela de trás) aparece por uma fração de segundo. Força a primeira
+   * pintura do fundo opaco (.qs-popup) ANTES do present: só pintura,
+   * nenhum dado sync/bloqueante. Não bombear gtk_main_iteration aqui
+   * (reentrância/grab — ver comentário abaixo). */
+  {
+    GdkWindow *pwin = gtk_widget_get_window (qs->popup);
+
+    if (pwin != NULL)
+      {
+        gdk_window_invalidate_rect (pwin, NULL, FALSE);
+        /* process_updates é deprecated no 3.22 mas segue funcional e é a
+         * única via que força o draw sem bombear o main loop; o pragma
+         * mantém o build em zero warnings. */
+        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+        gdk_window_process_updates (pwin, TRUE);
+        G_GNUC_END_IGNORE_DEPRECATIONS
+        gdk_display_flush (gdk_window_get_display (pwin));
+      }
+  }
   /* Position after show/size-allocate: show_all already allocated the
    * widgets, and qs_popup_position falls back to 320x200 on the first
    * map. No busy-loop drain here: pumping gtk_main_iteration reenters
@@ -233,6 +254,12 @@ construct_quick_settings (XfcePanelPlugin *plugin)
                     G_CALLBACK (qs_popup_on_key_press), qs);
   g_signal_connect (qs->popup, "hide",
                     G_CALLBACK (on_popup_hide_cancel_fade), qs);
+  /* Fundo opaco garantido: sem isto o toplevel mapeado antes do primeiro
+   * draw mostra transparência/lixo sem compositor (xfwm4). A regra
+   * .qs-popup (qs-theme.c) pinta @theme_bg_color sólida; o flush acima
+   * garante que ela apareça antes do present, e o fade segue só no filho
+   * (box "main") sobre o fundo já sólido. */
+  ui_add_class (qs->popup, "qs-popup");
   gtk_widget_set_size_request (qs->popup, 320, -1);
 
   qs->stack = gtk_stack_new ();
