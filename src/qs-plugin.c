@@ -1,3 +1,4 @@
+#include "qs-cache.h"
 #include "qs-core.h"
 #include "qs-ui.h"
 #include "qs-popup.h"
@@ -23,6 +24,32 @@ on_button_clicked (GtkButton *button,
       return;
     }
 
+  /* T3: render-from-cache primeiro (<1ms, via INI). Aplica tiles/subs
+   * a partir do INI fresco; chaves stale/ausentes ficam com "…". */
+  qs_cache_load (qs);
+  /* Badge "atualizando…" só p/ stale/ausente: não sobrescreve valor fresco. */
+  if (qs->wifi_sub != NULL)
+    {
+      const gchar *cur = gtk_label_get_text (GTK_LABEL (qs->wifi_sub));
+
+      if (cur == NULL || *cur == '\0' || g_strcmp0 (cur, "…") == 0)
+        gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "atualizando…");
+    }
+  qs->updating = TRUE;
+
+  /* Show IMEDIATO: nada bloqueante antes deste ponto. */
+  gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
+  gtk_widget_show_all (qs->popup);
+  /* Position after show/size-allocate: show_all already allocated the
+   * widgets, and qs_popup_position falls back to 320x200 on the first
+   * map. No busy-loop drain here: pumping gtk_main_iteration reenters
+   * widget signals/dialogs and can hide the popup underneath a grab. */
+  qs_popup_position (qs);
+  gtk_window_present (GTK_WINDOW (qs->popup));
+
+  /* SÓ DEPOIS do show: dispara refreshes (T4/T5 tornam wifi/notify
+   * não-bloqueantes; BT já é async). Cada done_cb/idle re-renderiza seu
+   * tile; um único schedule_save com debounce persiste na main. */
   audio_refresh_volume (qs);
   display_refresh_brightness (qs);
   display_refresh_tile (qs);
@@ -30,15 +57,10 @@ on_button_clicked (GtkButton *button,
   net_update_tiles (qs);
   net_refresh_bt_tile (qs); /* async: corrects the BT tile once probed */
   notify_update_tile (qs);
-  gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
-  gtk_widget_show_all (qs->popup);
+  notify_refresh_tile_async (qs); /* T5: cached acima + correção async */
   power_start (qs); /* after show_all: 30s timer only with a battery */
-  /* Position after show/size-allocate: show_all already allocated the
-   * widgets, and qs_popup_position falls back to 320x200 on the first
-   * map. No busy-loop drain here: pumping gtk_main_iteration reenters
-   * widget signals/dialogs and can hide the popup underneath a grab. */
-  qs_popup_position (qs);
-  gtk_window_present (GTK_WINDOW (qs->popup));
+  qs_cache_schedule_save (qs);
+  qs->updating = FALSE;
 }
 
 static gboolean
