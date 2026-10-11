@@ -14,7 +14,7 @@ sh install/arch/install.sh
 sh install/debian/install.sh
 ```
 
-> Lógica comum em `install/common/`; `install/arch/*` e `install/debian/*` são wrappers finos (só `deps.sh` difere por distro).
+> Lógica comum em install/common/; install/common/desktop.sh gera o .desktop em script (heredoc) e o instala; install/arch/* e install/debian/* são wrappers finos (só deps.sh difere por distro).
 
 ## Usar
 
