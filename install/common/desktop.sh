@@ -14,13 +14,27 @@ cd "$(dirname "$0")/../.."
 #
 PLUGIN_DIR="$(pkg-config --variable=libdir libxfce4panel-2.0)/xfce4/panel/plugins"
 DESKTOP_DIR="/usr/share/xfce4/panel/plugins"
+TMP_DESKTOP="/tmp/quicksettings.desktop"
+#
+# GENERATE DESKTOP
+#
+cat > "$TMP_DESKTOP" <<EOF
+[Xfce Panel]
+Type=X-XFCE-PanelPlugin
+Name=Quick Settings
+Comment=Minimal example panel plugin
+Icon=preferences-system-symbolic
+X-XFCE-Module=quicksettings
+X-XFCE-API=2.0
+EOF
 #
 # INSTALL FILES
 #
 $SUDO install -d "$PLUGIN_DIR"
 $SUDO install -m 755 libquicksettings.so "$PLUGIN_DIR/libquicksettings.so"
 $SUDO install -d "$DESKTOP_DIR"
-$SUDO install -m 644 data/quicksettings.desktop "$DESKTOP_DIR/quicksettings.desktop"
+$SUDO install -m 644 "$TMP_DESKTOP" "$DESKTOP_DIR/quicksettings.desktop"
+rm -f "$TMP_DESKTOP"
 #
 # BACKLIGHT RULE
 #
