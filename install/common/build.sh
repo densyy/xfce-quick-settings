@@ -14,5 +14,7 @@ cc -Wall -Wextra -fPIC -O2 -shared -o build/libquicksettings.so \
   src/qs-notify.c src/qs-sysmon.c src/qs-popup.c src/qs-theme.c \
   src/qs-core.c src/qs-brightness.c src/qs-nightlight.c \
   src/qs-monitor.c src/qs-wifi.c src/qs-bluetooth.c src/qs-cache.c \
+  src/qs-bt-backend.c src/qs-wifi-backend.c src/qs-notify-store.c \
+  src/qs-audio-backend.c src/qs-sysmon-data.c src/qs-monitor-data.c \
   $(pkg-config --cflags gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0 sqlite3) \
   $(pkg-config --libs gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0) -lsqlite3

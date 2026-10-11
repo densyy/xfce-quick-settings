@@ -21,225 +21,11 @@
  * panel never blocks.
  */
 #include "qs-display.h"
+#include "qs-monitor-data.h"
 #include "qs-ui.h"
 #include "qs-util.h"
 
 #include <string.h>
-
-static const gchar *SCALE_FACTORS[] = { "1", "1.25", "1.5", "1.75", "2" };
-
-/* Valid output name ([A-Za-z0-9_.-], xrandr never emits anything else).
- * Rejected names are skipped at parse time and never applied. */
-static gboolean
-valid_monitor (const gchar *s)
-{
-  const gchar *p;
-
-  if (s == NULL || *s == '\0' || strlen (s) > 64)
-    return FALSE;
-  for (p = s; *p != '\0'; p++)
-    if (!g_ascii_isalnum (*p) && *p != '-' && *p != '_' && *p != '.')
-      return FALSE;
-  return TRUE;
-}
-
-static gboolean
-valid_mode (const gchar *s)
-{
-  const gchar *x;
-  const gchar *p;
-
-  if (s == NULL || !g_ascii_isdigit (*s))
-    return FALSE;
-  x = strchr (s, 'x');
-  if (x == NULL || x == s || x[1] == '\0')
-    return FALSE;
-  for (p = s; p < x; p++)
-    if (!g_ascii_isdigit (*p))
-      return FALSE;
-  for (p = x + 1; *p != '\0'; p++)
-    if (!g_ascii_isdigit (*p))
-      return FALSE;
-  return TRUE;
-}
-
-static gboolean
-valid_scale (const gchar *s)
-{
-  gsize i;
-
-  for (i = 0; i < G_N_ELEMENTS (SCALE_FACTORS); i++)
-    if (g_strcmp0 (s, SCALE_FACTORS[i]) == 0)
-      return TRUE;
-  return FALSE;
-}
-
-typedef struct
-{
-  gchar    *name;
-  GList    *modes;         /* gchar*, na ordem do xrandr */
-  gchar    *current;       /* modo com '*', ou NULL */
-  gboolean  header_active; /* header tem geometria WxH+X+Y */
-  gboolean  active;         /* header_active || current != NULL */
-} QsMonInfo;
-
-typedef struct
-{
-  GList *mons; /* QsMonInfo*, na ordem do dump */
-  gint   n_connected;
-  gint   n_active;
-} QsDisplaySnap;
-
-static void
-qs_mon_info_free (gpointer data)
-{
-  QsMonInfo *m = data;
-
-  if (m == NULL)
-    return;
-  g_free (m->name);
-  g_list_free_full (m->modes, g_free);
-  g_free (m->current);
-  g_free (m);
-}
-
-static void
-qs_display_snap_free (QsDisplaySnap *snap)
-{
-  if (snap == NULL)
-    return;
-  g_list_free_full (snap->mons, qs_mon_info_free);
-  g_free (snap);
-}
-
-/* Geometry token ("1920x1080+0+0") in a header means the output is
- * actively driving pixels. After "--off" the header keeps "connected"
- * but loses the geometry (modes stay listed, '*' disappears), so the
- * header alone tells on from off. */
-static gboolean
-header_has_geometry (const gchar *header)
-{
-  gchar    **tok;
-  gint       t;
-  gboolean   active = FALSE;
-
-  if (header == NULL)
-    return FALSE;
-  tok = g_strsplit_set (header, " \t", -1);
-  for (t = 0; tok[t] != NULL; t++)
-    {
-      if (g_ascii_isdigit (tok[t][0])
-          && strchr (tok[t], 'x') != NULL
-          && strchr (tok[t], '+') != NULL)
-        {
-          active = TRUE;
-          break;
-        }
-    }
-  g_strfreev (tok);
-  return active;
-}
-
-/* Um único g_strsplit do dump; uma passada constrói monitores + modos +
- * current + active + contadores. Semântica igual aos antigos
- * parse_monitors/parse_modes/monitor_header/count_displays. */
-static QsDisplaySnap *
-qs_display_snap_new (const gchar *output)
-{
-  QsDisplaySnap *snap = g_new0 (QsDisplaySnap, 1);
-  gchar **lines;
-  gint i;
-  QsMonInfo *cur = NULL;
-
-  if (output == NULL)
-    return snap;
-  lines = g_strsplit (output, "\n", -1);
-  for (i = 0; lines[i] != NULL; i++)
-    {
-      const gchar *line = lines[i];
-
-      if (*line == '\0')
-        continue;
-      if (*line == ' ' || *line == '\t')
-        {
-          gchar *s;
-          gchar *end;
-
-          if (cur == NULL)
-            continue;
-          s = g_strdup (line);
-          g_strstrip (s);
-          end = strpbrk (s, " \t");
-          if (end != NULL)
-            *end = '\0';
-          if (valid_mode (s))
-            {
-              cur->modes = g_list_append (cur->modes, g_strdup (s));
-              if (cur->current == NULL && strchr (line, '*') != NULL)
-                cur->current = g_strdup (s);
-            }
-          g_free (s);
-        }
-      else
-        {
-          gchar *s = g_strdup (line);
-          gchar **tok;
-          gint t;
-          gboolean connected = FALSE;
-
-          g_strstrip (s);
-          tok = g_strsplit_set (s, " \t", -1);
-          for (t = 1; tok[t] != NULL; t++)
-            if (g_strcmp0 (tok[t], "connected") == 0)
-              connected = TRUE;
-          if (connected && tok[0] != NULL && valid_monitor (tok[0]))
-            {
-              QsMonInfo *m = g_new0 (QsMonInfo, 1);
-
-              m->name = g_strdup (tok[0]);
-              m->header_active = header_has_geometry (line);
-              snap->mons = g_list_append (snap->mons, m);
-              cur = m;
-            }
-          else
-            {
-              cur = NULL;
-            }
-          g_strfreev (tok);
-          g_free (s);
-        }
-    }
-  g_strfreev (lines);
-
-  snap->n_connected = g_list_length (snap->mons);
-  for (GList *l = snap->mons; l != NULL; l = l->next)
-    {
-      QsMonInfo *m = l->data;
-
-      m->active = m->header_active || (m->current != NULL);
-      if (m->active)
-        snap->n_active++;
-    }
-  return snap;
-}
-
-static QsMonInfo *
-qs_snap_find (QsDisplaySnap *snap,
-              const gchar   *name)
-{
-  GList *l;
-
-  if (snap == NULL || !valid_monitor (name))
-    return NULL;
-  for (l = snap->mons; l != NULL; l = l->next)
-    {
-      QsMonInfo *m = l->data;
-
-      if (g_strcmp0 (m->name, name) == 0)
-        return m;
-    }
-  return NULL;
-}
 
 /* Syncs the "Monitor on/off" switch to the selected monitor. Caller holds
  * qs->updating (programmatic set must not fire the apply handler).
@@ -449,7 +235,7 @@ display_query_done (const gchar *output,
 
   prev = g_strdup (gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo)));
   if (prev != NULL
-      && (g_strcmp0 (prev, "none") == 0 || !valid_monitor (prev)))
+      && (g_strcmp0 (prev, "none") == 0 || !valid_monitor_shared (prev)))
     {
       g_free (prev);
       prev = NULL;
@@ -545,7 +331,7 @@ on_mon_changed (GtkComboBox *combo,
   if (!gtk_widget_is_sensitive (GTK_WIDGET (combo)))
     return;
   id = gtk_combo_box_get_active_id (combo);
-  if (!valid_monitor (id) || qs->display_last == NULL)
+  if (!valid_monitor_shared (id) || qs->display_last == NULL)
     return;
   /* Um parse do cache; antes eram 3 (modes + active + counts). */
   snap = qs_display_snap_new (qs->display_last);
@@ -593,7 +379,7 @@ on_mode_changed (GtkComboBox *combo,
     return;
   mon = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo));
   mode = gtk_combo_box_get_active_id (combo);
-  if (!valid_monitor (mon) || !valid_mode (mode))
+  if (!valid_monitor_shared (mon) || !valid_mode (mode))
     return;
   qmon = g_shell_quote (mon);
   qmode = g_shell_quote (mode);
@@ -621,7 +407,7 @@ on_scale_changed (GtkComboBox *combo,
     return;
   mon = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo));
   factor = gtk_combo_box_get_active_id (combo);
-  if (!valid_monitor (mon) || !valid_scale (factor))
+  if (!valid_monitor_shared (mon) || !valid_scale (factor))
     return;
   qmon = g_shell_quote (mon);
   cmd = g_strdup_printf ("xrandr --output %s --scale %sx%s",
@@ -758,7 +544,7 @@ on_mon_power_changed (GObject    *obj,
       || !gtk_widget_is_sensitive (qs->mon_switch))
     return;
   mon = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo));
-  if (!valid_monitor (mon))
+  if (!valid_monitor_shared (mon))
     return;
   if (!on && qs->display_last != NULL)
     {

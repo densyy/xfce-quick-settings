@@ -6,158 +6,7 @@
 #include "qs-ui.h"
 #include "qs-util.h"
 #include "qs-cache.h"
-
-#include <string.h>
-
-typedef struct
-{
-  gchar    *ssid;
-  gint      signal;
-  gboolean  secured;
-  gboolean  active;
-} WifiNet;
-
-static void
-wifi_net_free (gpointer data)
-{
-  WifiNet *net = data;
-
-  g_free (net->ssid);
-  g_free (net);
-}
-
-/* Local copy of the nmcli terse splitter (unescaped ':'; handles \: \\).
- * Kept here so the wifi backend does not depend on qs-util's
- * split_terse_line() (which exists only for nmcli output). */
-static gchar **
-wifi_split_terse (const gchar *line,
-                  gint         expected_fields)
-{
-  GPtrArray   *fields = g_ptr_array_new ();
-  GString     *cur = g_string_new (NULL);
-  const gchar *p = line;
-
-  while (*p != '\0')
-    {
-      if (*p == '\\' && *(p + 1) != '\0')
-        {
-          g_string_append_c (cur, *(p + 1));
-          p += 2;
-        }
-      else if (*p == ':' && fields->len < (guint) (expected_fields - 1))
-        {
-          g_ptr_array_add (fields, g_strdup (cur->str));
-          g_string_truncate (cur, 0);
-          p++;
-        }
-      else
-        {
-          g_string_append_c (cur, *p);
-          p++;
-        }
-    }
-  g_ptr_array_add (fields, g_strdup (cur->str));
-  g_string_free (cur, TRUE);
-  while (fields->len < (guint) expected_fields)
-    g_ptr_array_add (fields, g_strdup (""));
-  g_ptr_array_add (fields, NULL);
-  return (gchar **) g_ptr_array_free (fields, FALSE);
-}
-
-gboolean
-wifi_available (void)
-{
-  return command_exists ("nmcli");
-}
-
-/* Synchronous radio query. WORKER THREADS ONLY (spawns nmcli); the UI
- * thread must use the cached qs->wifi_on or the load worker result. */
-gboolean
-wifi_enabled_sync (void)
-{
-  gchar    *output = run_command ("nmcli radio wifi");
-  gboolean  on = FALSE;
-
-  if (output != NULL)
-    {
-      on = g_str_has_prefix (g_strstrip (output), "enabled");
-      g_free (output);
-    }
-  return on;
-}
-
-static void
-wifi_set_enabled (gboolean on)
-{
-  gchar *cmd = g_strdup_printf ("nmcli radio wifi %s", on ? "on" : "off");
-
-  spawn_command (cmd);
-  g_free (cmd);
-}
-
-/* Parses "IN-USE,SSID,SIGNAL,SECURITY" terse output. Dedupes by SSID (one
- * row per SSID): keeps the strongest signal, marks active if any BSSID
- * is current. prepend+reverse keeps list order without O(n^2) append. */
-static GList *
-parse_wifi_list (const gchar *output)
-{
-  GList      *nets = NULL;
-  GHashTable *seen;
-  gchar     **lines;
-  gint        i;
-
-  if (output == NULL)
-    return NULL;
-  /* Keys are net->ssid owned by the WifiNet values: destroy neither on
-   * table teardown (the GList owns them). */
-  seen = g_hash_table_new (g_str_hash, g_str_equal);
-  lines = g_strsplit (output, "\n", -1);
-  for (i = 0; lines[i] != NULL; i++)
-    {
-      gchar    **fields;
-      WifiNet   *existing;
-      gint       signal;
-      gboolean   secured;
-      gboolean   active;
-
-      if (*lines[i] == '\0')
-        continue;
-      fields = wifi_split_terse (lines[i], 4);
-      if (*fields[1] == '\0')
-        {
-          g_strfreev (fields);
-          continue;
-        }
-      signal = atoi (fields[2]);
-      secured = !(g_strcmp0 (fields[3], "--") == 0 || *fields[3] == '\0');
-      active = (g_strcmp0 (fields[0], "*") == 0);
-      existing = g_hash_table_lookup (seen, fields[1]);
-      if (existing == NULL)
-        {
-          WifiNet *net = g_new0 (WifiNet, 1);
-
-          net->ssid = g_strdup (fields[1]);
-          net->signal = signal;
-          net->secured = secured;
-          net->active = active;
-          nets = g_list_prepend (nets, net);
-          g_hash_table_insert (seen, net->ssid, net);
-        }
-      else
-        {
-          if (signal > existing->signal)
-            {
-              existing->signal = signal;
-              existing->secured = secured;
-            }
-          existing->active = existing->active || active;
-        }
-      g_strfreev (fields);
-    }
-  g_strfreev (lines);
-  g_hash_table_destroy (seen);
-  return g_list_reverse (nets);
-}
+#include "qs-wifi-backend.h"
 
 /* --- Saved-profile cache (avoids `nmcli connection show` on UI path) ---
  * Dialog path (row click) uses the cache only: unknown/stale SSIDs are
@@ -214,7 +63,7 @@ wifi_saved_refresh_sync (void)
 
           if (*lines[i] == '\0')
             continue;
-          fields = wifi_split_terse (lines[i], 2);
+          fields = split_terse_line (lines[i], 2);
           if (g_strcmp0 (fields[0], "") != 0
               && g_strcmp0 (fields[1], "802-11-wireless") == 0
               && g_hash_table_lookup (fresh, fields[0]) == NULL)
@@ -296,18 +145,6 @@ wifi_free_cache (void)
   g_mutex_unlock (&wifi_saved_mutex);
 }
 
-static const gchar *
-wifi_signal_icon (gint signal)
-{
-  if (signal >= 75)
-    return "network-wireless-signal-excellent-symbolic";
-  if (signal >= 50)
-    return "network-wireless-signal-good-symbolic";
-  if (signal >= 25)
-    return "network-wireless-signal-ok-symbolic";
-  return "network-wireless-signal-weak-symbolic";
-}
-
 static void
 wifi_style_card_row (GtkWidget *row,
                      GtkWidget *content)
@@ -320,7 +157,6 @@ wifi_style_card_row (GtkWidget *row,
   gtk_container_set_border_width (GTK_CONTAINER (content), QS_CONTENT_PAD);
 }
 
-/* 4th hbox child (check/lock badge): NULL when open+inactive. */
 static GtkWidget *
 wifi_badge_new (const WifiNet *net)
 {
@@ -376,7 +212,6 @@ wifi_make_row (const WifiNet *net)
   return row;
 }
 
-/* Patches icon/meta/badge in place; reorders nothing (caller reorders). */
 static void
 wifi_patch_row (GtkWidget     *row,
                 const WifiNet *net)
@@ -408,7 +243,6 @@ wifi_patch_row (GtkWidget     *row,
           labels_seen++;
           if (labels_seen == 1)
             {
-              /* name label: SSID is the row key, already equal. */
             }
           else if (labels_seen == 2 && meta == NULL)
             meta = GTK_WIDGET (k->data);
