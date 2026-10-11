@@ -3,5 +3,4 @@ set -eu
 #
 # CLEAN BUILD
 #
-cd "$(dirname "$0")/../.."
-rm -f libquicksettings.so src/*.o src/*.d
+sh "$(dirname "$0")/../common/clean.sh"
