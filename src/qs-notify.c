@@ -1,4 +1,5 @@
 #include "qs-notify.h"
+#include "qs-cache.h"
 #include "qs-ui.h"
 
 #include <sqlite3.h>
@@ -469,8 +470,8 @@ notify_fill_list_if_changed (QuickSettings *qs)
   }
 }
 
-/* Tile leve: stat fast-path (sem sqlite) quando mtime+size iguais;
- * senão 1 query COUNT+MAX (sem parse de 30 rows). */
+/* Tile leve cached/fast-path apenas (T5): stat mtime+size + tile.
+ * NUNCA sqlite aqui — a correção vai em notify_refresh_tile_async. */
 void
 notify_update_tile (QuickSettings *qs)
 {
@@ -478,42 +479,96 @@ notify_update_tile (QuickSettings *qs)
   struct stat st;
   gboolean    have_stat = (stat (path, &st) == 0);
 
+  g_free (path);
   if (notify_cache_ready && have_stat
       && st.st_mtime == notify_cached_mtime
       && st.st_size == notify_cached_size)
     {
-      g_free (path);
       notify_set_tile_count (qs, notify_cached_count);
       return;
     }
-  g_free (path);
-  {
-    gint   count = -1;
-    gint64 max_ts = 0;
+  if (notify_cache_ready)
+    {
+      /* Stat divergiu (ou DB sumiu): pinta o último valor conhecido
+       * (stale); o worker async corrige em seguida. */
+      notify_set_tile_count (qs, notify_cached_count);
+      return;
+    }
+  /* First-run sem cache: mantém o que qs_cache_load pintou ("…"/"Empty"). */
+}
 
-    if (!notify_db_signature (&count, &max_ts))
-      {
-        notify_cached_count = 0;
-        notify_cached_max = 0;
-        notify_cache_ready = TRUE;
-        if (have_stat)
-          {
-            notify_cached_mtime = st.st_mtime;
-            notify_cached_size = st.st_size;
-          }
-        notify_set_tile_count (qs, 0);
-        return;
-      }
-    notify_cached_count = count;
-    notify_cached_max = max_ts;
-    notify_cache_ready = TRUE;
-    if (have_stat)
-      {
-        notify_cached_mtime = st.st_mtime;
-        notify_cached_size = st.st_size;
-      }
-    notify_set_tile_count (qs, count);
-  }
+typedef struct
+{
+  QuickSettings *qs;
+  gint           count;
+  gint64         max_ts;
+  struct stat    st;
+  gboolean       have_stat;
+  gboolean       ok;
+  guint          seq;
+} NotifyTileProbe;
+
+static gboolean
+notify_tile_probe_idle (gpointer data)
+{
+  NotifyTileProbe *p = data;
+  QuickSettings   *qs = p->qs;
+
+  if (!qs->dead && p->seq == qs->cache_seq && p->ok)
+    {
+      notify_cached_count = p->count;
+      notify_cached_max = p->max_ts;
+      notify_cache_ready = TRUE;
+      if (p->have_stat)
+        {
+          notify_cached_mtime = p->st.st_mtime;
+          notify_cached_size = p->st.st_size;
+        }
+      notify_set_tile_count (qs, p->count);
+      qs_cache_schedule_save (qs);
+    }
+  else if (!qs->dead && p->seq == qs->cache_seq && !p->ok && p->have_stat)
+    {
+      /* DB ilegível mas stat ok: registra stat p/ não repetir sqlite. */
+      notify_cached_mtime = p->st.st_mtime;
+      notify_cached_size = p->st.st_size;
+    }
+  g_free (p);
+  qs_unref (qs);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+notify_tile_probe_thread (gpointer data)
+{
+  NotifyTileProbe *p = data;
+  gchar           *path = notify_db_path ();
+
+  /* Worker: SÓ stat + notify_db_signature (plain-data). NUNCA gtk_*,
+   * NUNCA handle sqlite3* entre threads (só count/max_ts copiados). */
+  p->have_stat = (stat (path, &p->st) == 0);
+  g_free (path);
+  p->ok = notify_db_signature (&p->count, &p->max_ts);
+  g_idle_add (notify_tile_probe_idle, p);
+  return NULL;
+}
+
+/* Correção assíncrona (T5): worker stat+sqlite, volta na main via idle.
+ * Reaproveita o debounce existente (NOTIFY_DEBOUNCE_MS) via o caminho
+ * notify_schedule_refresh → notify_refresh_visible; sem segundo timer. */
+void
+notify_refresh_tile_async (QuickSettings *qs)
+{
+  NotifyTileProbe *p;
+
+  if (qs == NULL || qs->dead)
+    return;
+  p = g_new0 (NotifyTileProbe, 1);
+  p->qs = qs;
+  p->seq = ++qs->cache_seq;
+  qs_ref (qs);
+  g_thread_unref (g_thread_new ("qs-notify-tile",
+                                notify_tile_probe_thread, p));
 }
 
 /* Refreshes tile always, list only when the "notices" page is showing
@@ -526,6 +581,9 @@ notify_refresh_visible (QuickSettings *qs)
   if (qs->dead || !gtk_widget_get_visible (qs->popup))
     return;
   notify_update_tile (qs);
+  /* T5: cached acima (instantâneo) + correção async; debounce de 500ms
+   * já existente (NOTIFY_DEBOUNCE_MS) reaproveitado — sem segundo timer. */
+  notify_refresh_tile_async (qs);
   name = gtk_stack_get_visible_child_name (GTK_STACK (qs->stack));
   if (g_strcmp0 (name, "notices") == 0)
     notify_fill_list_if_changed (qs);
