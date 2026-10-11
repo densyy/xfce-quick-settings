@@ -2,6 +2,8 @@
 
 Popup com controles de áudio, brilho, rede, energia, sessão e sistema.
 
+![Quick Settings popup](docs/images/screenshot.png)
+
 ## Instalar no Arch
 
 ```sh
