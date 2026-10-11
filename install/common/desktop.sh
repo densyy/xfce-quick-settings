@@ -31,7 +31,7 @@ EOF
 # INSTALL FILES
 #
 $SUDO install -d "$PLUGIN_DIR"
-$SUDO install -m 755 libquicksettings.so "$PLUGIN_DIR/libquicksettings.so"
+$SUDO install -m 755 build/libquicksettings.so "$PLUGIN_DIR/libquicksettings.so"
 $SUDO install -d "$DESKTOP_DIR"
 $SUDO install -m 644 "$TMP_DESKTOP" "$DESKTOP_DIR/quicksettings.desktop"
 rm -f "$TMP_DESKTOP"

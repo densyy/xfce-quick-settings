@@ -7,7 +7,8 @@ cd "$(dirname "$0")/../.."
 #
 # COMPILE SOURCES
 #
-cc -Wall -Wextra -fPIC -O2 -shared -o libquicksettings.so \
+mkdir -p build
+cc -Wall -Wextra -fPIC -O2 -shared -o build/libquicksettings.so \
   src/qs-plugin.c src/qs-util.c src/qs-ui.c src/qs-audio.c \
   src/qs-display.c src/qs-net.c src/qs-power.c src/qs-session.c \
   src/qs-notify.c src/qs-sysmon.c src/qs-popup.c src/qs-theme.c \
