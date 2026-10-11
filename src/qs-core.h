@@ -4,6 +4,9 @@
 #include <gtk/gtk.h>
 #include <libxfce4panel/libxfce4panel.h>
 
+/* Plugin version (single source of truth). */
+#define QS_VERSION "1.0.0"
+
 /* Plugin state shared by all modules. Widgets are created by each
  * module's build function and refreshed by its refresh function. */
 typedef struct
