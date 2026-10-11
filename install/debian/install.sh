@@ -9,5 +9,5 @@ cd "$(dirname "$0")"
 #
 sh ./deps.sh
 sh ../common/build.sh
-sh ../common/install-desktop.sh
+sh ../common/desktop.sh
 echo "Done. Add 'Quick Settings' from the XFCE panel item list."
