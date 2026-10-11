@@ -74,6 +74,7 @@ typedef struct
   gboolean         bt_tile_probe; /* tile-only BT probe in flight */
   gboolean         updating; /* TRUE while loading current values */
   guint            cache_seq; /* monotonic anti-stale counter (T3/T4/T5) */
+  guint            fade_tick; /* tick callback id for 150ms open fade (0 = none) */
   gint             refcount; /* async ops hold a ref; free at zero */
   gboolean         dead; /* TRUE after free-data: don't touch widgets */
 } QuickSettings;

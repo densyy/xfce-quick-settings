@@ -102,6 +102,9 @@ make_nav_tile (GtkWidget    *box,
       ui_add_class (sub, "qs-sub");
       gtk_widget_set_halign (sub, GTK_ALIGN_START);
       gtk_label_set_ellipsize (GTK_LABEL (sub), PANGO_ELLIPSIZE_END);
+      gtk_label_set_width_chars (GTK_LABEL (sub), 12);
+      gtk_label_set_max_width_chars (GTK_LABEL (sub), 14);
+      gtk_widget_set_hexpand (sub, TRUE);
       gtk_box_pack_start (GTK_BOX (vbox), sub, FALSE, FALSE, 0);
       *sub_out = sub;
     }
@@ -140,6 +143,10 @@ make_mini_tile (GtkWidget    *box,
       sub = gtk_label_new ("");
       ui_add_class (sub, "qs-sub");
       gtk_widget_set_halign (sub, GTK_ALIGN_CENTER);
+      gtk_label_set_ellipsize (GTK_LABEL (sub), PANGO_ELLIPSIZE_END);
+      gtk_label_set_width_chars (GTK_LABEL (sub), 12);
+      gtk_label_set_max_width_chars (GTK_LABEL (sub), 14);
+      gtk_widget_set_hexpand (sub, TRUE);
       gtk_box_pack_start (GTK_BOX (vbox), sub, FALSE, FALSE, 0);
       *sub_out = sub;
     }

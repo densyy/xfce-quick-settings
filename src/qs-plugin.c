@@ -10,6 +10,103 @@
 #include "qs-notify.h"
 #include "qs-sysmon.h"
 
+static GtkWidget *
+qs_fade_box (QuickSettings *qs)
+{
+  if (qs->stack == NULL)
+    return NULL;
+  return gtk_stack_get_child_by_name (GTK_STACK (qs->stack), "main");
+}
+
+static void
+qs_fade_cancel (QuickSettings *qs)
+{
+  GtkWidget *box;
+
+  if (qs->fade_tick == 0)
+    return;
+  box = qs_fade_box (qs);
+  if (box != NULL)
+    {
+      gtk_widget_remove_tick_callback (box, qs->fade_tick);
+      gtk_widget_set_opacity (box, 1.0);
+      g_object_set_data (G_OBJECT (box), "qs-fade-start", NULL);
+    }
+  qs->fade_tick = 0;
+}
+
+/* Fade 150ms ease-out no filho (box "main"), nunca no toplevel:
+ * sem compositor o opacity no toplevel vira no-op / pisca. */
+static gboolean
+qs_fade_tick_cb (GtkWidget     *widget,
+                 GdkFrameClock *frame_clock,
+                 gpointer       user_data)
+{
+  QuickSettings *qs = user_data;
+  gint64        *pstart;
+  gint64         now;
+  gint64         elapsed;
+  const gint64   total = 150 * 1000; /* 150ms em microssegundos */
+  gdouble        p;
+  gdouble        e;
+
+  if (qs->dead)
+    {
+      qs->fade_tick = 0;
+      g_object_set_data (G_OBJECT (widget), "qs-fade-start", NULL);
+      return G_SOURCE_REMOVE;
+    }
+
+  pstart = g_object_get_data (G_OBJECT (widget), "qs-fade-start");
+  now = gdk_frame_clock_get_frame_time (frame_clock);
+  if (pstart == NULL)
+    {
+      pstart = g_new (gint64, 1);
+      *pstart = now;
+      g_object_set_data_full (G_OBJECT (widget), "qs-fade-start",
+                              pstart, g_free);
+      gtk_widget_set_opacity (widget, 0.0);
+      return G_SOURCE_CONTINUE;
+    }
+
+  elapsed = now - *pstart;
+  if (elapsed >= total)
+    {
+      gtk_widget_set_opacity (widget, 1.0);
+      g_object_set_data (G_OBJECT (widget), "qs-fade-start", NULL);
+      qs->fade_tick = 0;
+      return G_SOURCE_REMOVE;
+    }
+
+  p = (gdouble) elapsed / (gdouble) total;
+  e = 1.0 - (1.0 - p) * (1.0 - p); /* ease-out quadrático */
+  gtk_widget_set_opacity (widget, e);
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+qs_fade_start (QuickSettings *qs)
+{
+  GtkWidget *box = qs_fade_box (qs);
+
+  if (box == NULL)
+    return;
+  gtk_widget_set_opacity (box, 0.0);
+  qs->fade_tick = gtk_widget_add_tick_callback (box, qs_fade_tick_cb,
+                                                qs, NULL);
+}
+
+static void
+on_popup_hide_cancel_fade (GtkWidget *widget,
+                           gpointer   user_data)
+{
+  QuickSettings *qs = user_data;
+
+  (void) widget;
+
+  qs_fade_cancel (qs);
+}
+
 static void
 on_button_clicked (GtkButton *button,
                    gpointer   user_data)
@@ -17,6 +114,9 @@ on_button_clicked (GtkButton *button,
   QuickSettings *qs = user_data;
 
   (void) button;
+
+  /* Toggle rápido: cancela fade pendente antes de qualquer caminho. */
+  qs_fade_cancel (qs);
 
   if (gtk_widget_get_visible (qs->popup))
     {
@@ -46,6 +146,9 @@ on_button_clicked (GtkButton *button,
    * widget signals/dialogs and can hide the popup underneath a grab. */
   qs_popup_position (qs);
   gtk_window_present (GTK_WINDOW (qs->popup));
+
+  /* Fade 150ms no filho (box "main"), nunca no toplevel. */
+  qs_fade_start (qs);
 
   /* SÓ DEPOIS do show: dispara refreshes (T4/T5 tornam wifi/notify
    * não-bloqueantes; BT já é async). Cada done_cb/idle re-renderiza seu
@@ -88,6 +191,7 @@ quick_settings_free (XfcePanelPlugin *plugin,
   sysmon_stop (qs);
   power_stop (qs);
   net_cleanup ();
+  qs_fade_cancel (qs);
   gtk_widget_destroy (qs->popup);
   qs_unref (qs);
 }
@@ -127,6 +231,8 @@ construct_quick_settings (XfcePanelPlugin *plugin)
                     G_CALLBACK (qs_popup_on_focus_out), qs);
   g_signal_connect (qs->popup, "key-press-event",
                     G_CALLBACK (qs_popup_on_key_press), qs);
+  g_signal_connect (qs->popup, "hide",
+                    G_CALLBACK (on_popup_hide_cancel_fade), qs);
   gtk_widget_set_size_request (qs->popup, 320, -1);
 
   qs->stack = gtk_stack_new ();
