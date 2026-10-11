@@ -1,7 +1,9 @@
 #include "qs-popup.h"
 
 void
-qs_popup_position (QuickSettings *qs)
+qs_popup_position_at_size (QuickSettings *qs,
+                           gint           popup_width,
+                           gint           popup_height)
 {
   GdkWindow    *button_window;
   GdkDisplay   *display;
@@ -10,8 +12,6 @@ qs_popup_position (QuickSettings *qs)
   GtkAllocation allocation;
   gint          origin_x = 0;
   gint          origin_y = 0;
-  gint          popup_width;
-  gint          popup_height;
   gint          x;
   gint          y;
 
@@ -31,12 +31,10 @@ qs_popup_position (QuickSettings *qs)
   else
     monitor = (GdkRectangle) { 0, 0, 1024, 768 };
 
-  gtk_window_get_size (GTK_WINDOW (qs->popup), &popup_width, &popup_height);
-  if (popup_width <= 1 || popup_height <= 1)
-    {
-      popup_width = 320;
-      popup_height = 200;
-    }
+  if (popup_width <= 1)
+    popup_width = 320;
+  if (popup_height <= 1)
+    popup_height = 200;
 
   x = origin_x + allocation.x + allocation.width - popup_width;
   y = origin_y + allocation.y + allocation.height + 6;
@@ -52,6 +50,19 @@ qs_popup_position (QuickSettings *qs)
     y = monitor.y + 6;
 
   gtk_window_move (GTK_WINDOW (qs->popup), x, y);
+}
+
+/* Caminho legado / pós-map (mantido p/ compat): mede via
+ * gtk_window_get_size e delega. NÃO usar no caminho de abertura —
+ * lá o move precisa acontecer ANTES do map (ver on_button_clicked). */
+void
+qs_popup_position (QuickSettings *qs)
+{
+  gint popup_width = 0;
+  gint popup_height = 0;
+
+  gtk_window_get_size (GTK_WINDOW (qs->popup), &popup_width, &popup_height);
+  qs_popup_position_at_size (qs, popup_width, popup_height);
 }
 
 gboolean

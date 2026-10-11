@@ -139,33 +139,54 @@ on_button_clicked (GtkButton *button,
 
   /* Show IMEDIATO: nada bloqueante antes deste ponto. */
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "main");
+  /* Anti-flash (sem compositor, xfwm4): o frame de lixo vinha de
+   * show(map) → move → present. O move pós-map desloca uma janela
+   * recém-mapeada cujo expose é assíncrono, então 1 frame do
+   * framebuffer velho (espelho da janela fullscreen de trás) aparece
+   * na posição nova. Correção: mover ANTES de mapear.
+   * 1. show_all só no stack (subárvore fica visible p/ requisição
+   *    válida, mas o toplevel segue UNMAPPED → sem map ainda);
+   * 2. realize sem show (cria a GdkWindow sem mapear);
+   * 3. mede via get_preferred_size (sem map);
+   * 4. gtk_window_move AINDA UNMAPPED;
+   * 5. só então show_all (map já na posição final) + primeira pintura
+   *    forçada + present. Nenhum move pós-map neste caminho. */
+  {
+    GtkRequisition min_req;
+    GtkRequisition nat_req;
+    gint           pre_w;
+    gint           pre_h;
+
+    gtk_widget_show_all (qs->stack);
+    if (!gtk_widget_get_realized (qs->popup))
+      gtk_widget_realize (qs->popup);
+    gtk_widget_get_preferred_size (qs->popup, &min_req, &nat_req);
+    (void) min_req;
+    pre_w = nat_req.width;
+    pre_h = nat_req.height;
+    qs_popup_position_at_size (qs, pre_w, pre_h);
+  }
   gtk_widget_show_all (qs->popup);
-  /* Anti-flash (sem compositor): a janela X11 é mapeada pelo show_all
-   * antes do primeiro draw, então o framebuffer velho (lixo/espelho da
-   * janela de trás) aparece por uma fração de segundo. Força a primeira
-   * pintura do fundo opaco (.qs-popup) ANTES do present: só pintura,
-   * nenhum dado sync/bloqueante. Não bombear gtk_main_iteration aqui
-   * (reentrância/grab — ver comentário abaixo). */
+  /* Primeira pintura do fundo opaco (.qs-popup) ANTES do present: só
+   * pintura, nenhum dado sync/bloqueante. Não bombear
+   * gtk_main_iteration aqui (reentrância/grab). process_updates é
+   * deprecated no 3.22 mas segue funcional e é a única via que força
+   * o draw sem bombear o main loop; o pragma mantém zero warnings. */
   {
     GdkWindow *pwin = gtk_widget_get_window (qs->popup);
 
     if (pwin != NULL)
       {
         gdk_window_invalidate_rect (pwin, NULL, FALSE);
-        /* process_updates é deprecated no 3.22 mas segue funcional e é a
-         * única via que força o draw sem bombear o main loop; o pragma
-         * mantém o build em zero warnings. */
         G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         gdk_window_process_updates (pwin, TRUE);
         G_GNUC_END_IGNORE_DEPRECATIONS
         gdk_display_flush (gdk_window_get_display (pwin));
       }
   }
-  /* Position after show/size-allocate: show_all already allocated the
-   * widgets, and qs_popup_position falls back to 320x200 on the first
-   * map. No busy-loop drain here: pumping gtk_main_iteration reenters
+  /* Sem move pós-map: a janela já foi mapeada na posição final.
+   * No busy-loop drain aqui: pumping gtk_main_iteration reenters
    * widget signals/dialogs and can hide the popup underneath a grab. */
-  qs_popup_position (qs);
   gtk_window_present (GTK_WINDOW (qs->popup));
 
   /* Fade 150ms no filho (box "main"), nunca no toplevel. */
