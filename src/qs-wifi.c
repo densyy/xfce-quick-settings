@@ -5,6 +5,7 @@
 #include "qs-net.h"
 #include "qs-ui.h"
 #include "qs-util.h"
+#include "qs-cache.h"
 
 #include <string.h>
 
@@ -856,15 +857,83 @@ wifi_show_page (QuickSettings *qs)
   wifi_load_async (qs, FALSE);
 }
 
+/* Cached tile paint: sync-sem-spawn. Reads qs->wifi_on (filled by
+ * qs_cache_load) and only touches widgets. ZERO run_command /
+ * wifi_enabled_sync here (see T4: nmcli sync left the open path). */
 void
 wifi_update_tile (QuickSettings *qs)
 {
-  qs->wifi_on = wifi_available () ? wifi_enabled_sync () : FALSE;
+  gboolean avail = command_exists ("nmcli");
+
   set_tile_active (qs->wifi_tile, qs->wifi_on);
-  gtk_widget_set_sensitive (qs->wifi_tile, wifi_available ());
+  gtk_widget_set_sensitive (qs->wifi_tile, avail);
   gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
-                      !wifi_available () ? "Unavailable"
+                      !avail ? "Unavailable"
                       : qs->wifi_on ? "On" : "Off");
+}
+
+/* Async correction probe (mirrors bt_refresh_tile_async in
+ * qs-bluetooth.c). Worker runs ONLY command_exists + wifi_enabled_sync
+ * (plain-data); all widget/cache work happens in the idle on main. */
+typedef struct
+{
+  QuickSettings *qs;
+  gboolean       on;
+  gboolean       avail;
+  guint          seq;
+} WifiTileProbe;
+
+static gboolean
+wifi_tile_probe_idle (gpointer data)
+{
+  WifiTileProbe *p = data;
+  QuickSettings *qs = p->qs;
+
+  /* Stale (newer probe issued) or torn-down: drop. A full page load
+   * owns the tile while it runs (updates it on done). */
+  if (!qs->dead && p->seq == qs->cache_seq && !qs->scanning_wifi)
+    {
+      qs->wifi_on = p->on;
+      set_tile_active (qs->wifi_tile, p->on);
+      gtk_widget_set_sensitive (qs->wifi_tile, p->avail);
+      gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
+                          !p->avail ? "Unavailable"
+                          : p->on ? "On" : "Off");
+      qs_cache_schedule_save (qs);
+    }
+  g_free (p);
+  qs_unref (qs);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer
+wifi_tile_probe_thread (gpointer data)
+{
+  WifiTileProbe *p = data;
+
+  if (!p->qs->dead)
+    {
+      p->avail = command_exists ("nmcli");
+      p->on = p->avail ? wifi_enabled_sync () : FALSE;
+    }
+  g_idle_add (wifi_tile_probe_idle, p);
+  return NULL;
+}
+
+void
+wifi_refresh_tile_async (QuickSettings *qs)
+{
+  WifiTileProbe *p;
+
+  /* Don't race the full page load (wifi_load_async owns the tile). */
+  if (qs->scanning_wifi)
+    return;
+  qs_ref (qs);
+  qs->cache_seq++;
+  p = g_new0 (WifiTileProbe, 1);
+  p->qs = qs;
+  p->seq = qs->cache_seq;
+  g_thread_unref (g_thread_new ("qs-wifi-tile", wifi_tile_probe_thread, p));
 }
 
 /* Builds the Wi-Fi sub-page; back_out is left unwired for the facade. */

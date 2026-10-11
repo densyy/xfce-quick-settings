@@ -66,7 +66,10 @@ net_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 void
 net_update_tiles (QuickSettings *qs)
 {
+  /* T4: cached paint (sync-sem-spawn) now, async nmcli probe corrects
+   * the tile moments after popup open — never blocks the open path. */
   wifi_update_tile (qs);
+  wifi_refresh_tile_async (qs);
   /* Bluetooth never blocks here: cached state now, async probe (below)
    * corrects it moments after popup open. */
   bt_update_tile_cached (qs);

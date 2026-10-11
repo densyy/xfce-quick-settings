@@ -29,6 +29,7 @@ void net_cleanup (void);
 /* --- Wi-Fi module (qs-wifi.c), used by the facade --- */
 void wifi_show_page (QuickSettings *qs);
 void wifi_update_tile (QuickSettings *qs);
+void wifi_refresh_tile_async (QuickSettings *qs);
 void wifi_build_page (GtkWidget     *stack,
                       QuickSettings *qs,
                       GtkWidget    **back_out);
