@@ -53,8 +53,6 @@ net_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   g_signal_connect (qs->bt_tile, "clicked",
                     G_CALLBACK (on_bt_tile_clicked), qs);
 
-  /* Sub-pages own their switch/scan/list signals (see qs-wifi.c /
-   * qs-bluetooth.c); the facade only wires Back -> main. */
   wifi_build_page (stack, qs, &wifi_back);
   bt_build_page (stack, qs, &bt_back);
   g_signal_connect (wifi_back, "clicked",

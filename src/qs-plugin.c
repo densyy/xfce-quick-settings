@@ -115,7 +115,6 @@ on_button_clicked (GtkButton *button,
 
   (void) button;
 
-  /* Toggle rápido: cancela fade pendente antes de qualquer caminho. */
   qs_fade_cancel (qs);
 
   if (gtk_widget_get_visible (qs->popup))

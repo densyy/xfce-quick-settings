@@ -65,7 +65,6 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   make_slider_row (display_grid, 0, 100, "display-brightness-symbolic",
                    "Screen brightness",
                    NULL, &qs->bright_scale);
-  /* Piso visual igual ao do setter: impede arrastar até 0% (preto). */
   gtk_range_set_range (GTK_RANGE (qs->bright_scale),
                        BRIGHTNESS_MIN, 100.0);
 
@@ -86,9 +85,6 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                     G_CALLBACK (on_display_tile_clicked), qs);
 
   night_page = make_sub_page ("Night Light", &night_back);
-  /* Presets stay compact (qs-compact + tight inner padding); the box gap
-   * is the midpoint tight(4)+inner(8) = 6: breathing room without going
-   * back to the old 8px rhythm. */
   preset_box = gtk_box_new (GTK_ORIENTATION_VERTICAL,
                             (QS_TIGHT_GAP + QS_INNER_GAP) / 2);
   gtk_box_pack_start (GTK_BOX (night_page), preset_box, FALSE, FALSE, 0);
@@ -113,7 +109,6 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   mon_grid = make_group (disp_page, "Monitor");
   qs->mon_combo = make_combo_row (mon_grid, 0, "video-display-symbolic",
                                   "Monitor");
-  /* Monitor on/off row: same GtkSwitch pattern as Wi-Fi/Bluetooth. */
   {
     GtkWidget *power_icon;
     GtkWidget *power_box;
@@ -137,7 +132,6 @@ display_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
     gtk_widget_set_halign (qs->mon_switch, GTK_ALIGN_END);
     gtk_widget_set_valign (qs->mon_switch, GTK_ALIGN_CENTER);
     gtk_widget_set_tooltip_text (qs->mon_switch, "Monitor on/off");
-    /* First query enables it (avoids a brief wrong OFF affordance). */
     gtk_widget_set_sensitive (qs->mon_switch, FALSE);
     gtk_box_pack_start (GTK_BOX (power_box), qs->mon_switch,
                         FALSE, FALSE, 0);

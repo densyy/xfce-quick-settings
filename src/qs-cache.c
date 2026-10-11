@@ -1,10 +1,6 @@
 #include "qs-cache.h"
-
-#include <errno.h>
+#include "qs-ui.h"
 #include <sys/stat.h>
-
-/* Defined in the ui module. */
-void set_tile_active (GtkWidget *tile, gboolean active);
 
 static gchar *
 cache_path (void)
@@ -129,7 +125,6 @@ qs_cache_save (QuickSettings *qs)
     return;
   path = cache_path ();
   kf = g_key_file_new ();
-  /* Keep values this module cannot observe; missing file is fine. */
   g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL);
   now = g_get_real_time () / G_USEC_PER_SEC;
 
@@ -189,34 +184,6 @@ qs_cache_schedule_save (QuickSettings *qs)
 }
 
 void
-qs_cache_invalidate (const char *group)
-{
-  GKeyFile *kf;
-  gchar *path;
-
-  if (group == NULL || *group == '\0')
-    return;
-  path = cache_path ();
-  kf = g_key_file_new ();
-  if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL))
-    {
-      g_key_file_free (kf);
-      g_free (path);
-      return;
-    }
-  if (!g_key_file_has_group (kf, group))
-    {
-      g_key_file_free (kf);
-      g_free (path);
-      return;
-    }
-  g_key_file_remove_group (kf, group, NULL);
-  write_keyfile (kf, path);
-  g_key_file_free (kf);
-  g_free (path);
-}
-
-void
 qs_cache_load (QuickSettings *qs)
 {
   GKeyFile *kf;
@@ -243,7 +210,6 @@ qs_cache_load (QuickSettings *qs)
   g_free (path);
   now = g_get_real_time () / G_USEC_PER_SEC;
 
-  /* wifi on/off (slow): drives state, switch, tile and sub. */
   if (read_bool (kf, "wifi", "on", &on)
       && read_ts (kf, "wifi", "on_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_SLOW_S))
@@ -267,7 +233,6 @@ qs_cache_load (QuickSettings *qs)
   else if (qs->wifi_sub != NULL && !wifi_text_set)
     gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "…");
 
-  /* wifi ssid (fast): overrides the sub when fresh. */
   str = g_key_file_get_string (kf, "wifi", "ssid", &err);
   if (err != NULL)
     {
@@ -283,7 +248,6 @@ qs_cache_load (QuickSettings *qs)
   g_free (str);
   str = NULL;
 
-  /* bluetooth powered (slow). */
   if (read_bool (kf, "bluetooth", "powered", &powered)
       && read_ts (kf, "bluetooth", "powered_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_SLOW_S))
@@ -303,14 +267,12 @@ qs_cache_load (QuickSettings *qs)
   else if (qs->bt_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->bt_sub), "…");
 
-  /* bluetooth connected (fast): only refines the sub. */
   if (read_bool (kf, "bluetooth", "connected", &connected)
       && read_ts (kf, "bluetooth", "connected_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
       && connected && qs->bt_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Connected");
 
-  /* audio volume (no clock: valid whenever present). */
   if (read_int (kf, "audio", "volume", &volume) && qs->vol_scale != NULL)
     {
       qs->updating = TRUE;
@@ -319,14 +281,12 @@ qs_cache_load (QuickSettings *qs)
       qs->updating = FALSE;
     }
 
-  /* audio mute (fast). */
   if (read_bool (kf, "audio", "mute", &mute)
       && read_ts (kf, "audio", "mute_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
       && mute && qs->audio_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->audio_sub), "Muted");
 
-  /* display brightness (slow). */
   if (read_int (kf, "display", "brightness", &brightness)
       && read_ts (kf, "display", "brightness_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_SLOW_S)
@@ -338,7 +298,6 @@ qs_cache_load (QuickSettings *qs)
       qs->updating = FALSE;
     }
 
-  /* power percent (slow). */
   if (read_int (kf, "power", "percent", &percent)
       && read_ts (kf, "power", "percent_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_SLOW_S)
@@ -352,7 +311,6 @@ qs_cache_load (QuickSettings *qs)
   else if (qs->bat_label != NULL)
     gtk_label_set_text (GTK_LABEL (qs->bat_label), "—");
 
-  /* notify count (slow). */
   if (read_int (kf, "notify", "count", &count)
       && read_ts (kf, "notify", "count_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_SLOW_S)
@@ -371,14 +329,12 @@ qs_cache_load (QuickSettings *qs)
   else if (qs->notify_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->notify_sub), "…");
 
-  /* theme name (no clock: always valid, nothing to paint here). */
   str = g_key_file_get_string (kf, "theme", "name", &err);
   if (err != NULL)
     g_clear_error (&err);
   g_free (str);
   str = NULL;
 
-  /* nightlight (no clock: always valid). */
   if (read_bool (kf, "nightlight", "enabled", &enabled))
     {
       if (qs->night_tile != NULL)

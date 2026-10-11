@@ -279,7 +279,6 @@ power_upower_detail_done (const gchar *output,
     }
   else
     {
-      /* Sem bateria/detalhe: visível mas desabilitado, sem polling. */
       power_show_none (qs);
       power_stop (qs);
     }

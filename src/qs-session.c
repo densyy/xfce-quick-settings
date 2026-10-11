@@ -2,7 +2,6 @@
 #include "qs-ui.h"
 #include "qs-util.h"
 
-/* xfce4-session-logout shows its own confirmation dialog by default. */
 static void
 session_run (const gchar *xfce_arg,
              const gchar *fallback)

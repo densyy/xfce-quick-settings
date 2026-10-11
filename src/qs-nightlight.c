@@ -94,10 +94,6 @@ make_night_button (GtkWidget   *box,
   GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
   GtkWidget *text = gtk_label_new (label);
   GtkWidget *sub = gtk_label_new (temp);
-
-  /* Same list pattern as the Power page buttons; qs-tile keeps the
-   * :checked highlight for the active preset, qs-compact collapses the
-   * vertical padding so 4 presets fit in less space. */
   ui_add_class (button, "qs-tile");
   ui_add_class (button, "qs-compact");
   gtk_image_set_pixel_size (GTK_IMAGE (image), QS_ROW_ICON_PX);

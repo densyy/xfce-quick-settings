@@ -34,6 +34,8 @@ GtkWidget *make_combo_row (GtkWidget   *grid,
                            gint         row,
                            const gchar *icon_name,
                            const gchar *tooltip);
+/* Nome de output xrandr ([A-Za-z0-9_.-]). Symlink do validador de monitores. */
+gboolean valid_monitor_shared (const gchar *s);
 void display_load_async (QuickSettings *qs);
 void on_mon_changed (GtkComboBox *combo, gpointer user_data);
 void on_mode_changed (GtkComboBox *combo, gpointer user_data);

@@ -52,9 +52,6 @@ make_slider_row (GtkWidget    *grid,
   gtk_scale_set_draw_value (GTK_SCALE (scale), TRUE);
   gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_RIGHT);
   gtk_widget_set_hexpand (scale, TRUE);
-  /* Centered like the icon: without this the scale stretches (FILL) to
-   * the full row height, so a taller row (e.g. the volume "100%" mark
-   * below the trough) leaves the icon sitting below the bar. */
   gtk_widget_set_valign (scale, GTK_ALIGN_CENTER);
   gtk_widget_set_tooltip_text (scale, tooltip);
   gtk_grid_attach (GTK_GRID (grid), scale, 1, row, 1, 1);

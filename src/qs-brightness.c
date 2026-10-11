@@ -152,21 +152,6 @@ bright_valid_dev (const gchar *s)
   return TRUE;
 }
 
-/* Nome de output xrandr ([A-Za-z0-9_.-]). Duplicado aqui para o fragmento
- * não depender do fragmento de monitores. */
-static gboolean
-bright_valid_output (const gchar *s)
-{
-  const gchar *p;
-
-  if (s == NULL || *s == '\0' || strlen (s) > 64)
-    return FALSE;
-  for (p = s; *p != '\0'; p++)
-    if (!g_ascii_isalnum (*p) && *p != '-' && *p != '_' && *p != '.')
-      return FALSE;
-  return TRUE;
-}
-
 /* Melhor device em /sys/class/backlight, ou NULL (caller frees).
  * Descarta max<=0 ou ilegível; prefere nativo a acpi_video*. */
 static gchar *
@@ -350,7 +335,7 @@ bright_extract_output (const gchar *dump)
         {
           gchar **tok = g_strsplit (lines[i], " ", 2);
 
-          if (tok[0] != NULL && bright_valid_output (tok[0]))
+          if (tok[0] != NULL && valid_monitor_shared (tok[0]))
             name = g_strdup (tok[0]);
           g_strfreev (tok);
         }
@@ -690,7 +675,7 @@ set_brightness_percent (gint value)
        * Piso alto: 0.05 parece apagado e assusta. */
       gint vout = MAX (value, BRIGHTNESS_MIN_XRANDR);
 
-      if (bright_xout != NULL && bright_valid_output (bright_xout))
+      if (bright_xout != NULL && valid_monitor_shared (bright_xout))
         {
           gchar *qname = g_shell_quote (bright_xout);
           gchar *cmd = g_strdup_printf ("xrandr --output %s --brightness %.2f",
@@ -754,7 +739,7 @@ bright_set_for_qs (QuickSettings *qs,
         {
           gint vout = MAX (value, BRIGHTNESS_MIN_XRANDR);
 
-          if (bright_xout != NULL && bright_valid_output (bright_xout))
+          if (bright_xout != NULL && valid_monitor_shared (bright_xout))
             {
               gchar *qname = g_shell_quote (bright_xout);
               gchar *cmd = g_strdup_printf ("xrandr --output %s "
