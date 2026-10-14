@@ -183,9 +183,9 @@ sysmon_cpu_topology_text (void)
       }
   }
   if (cores > 0 && cores <= threads)
-    cached = g_strdup_printf ("%dC/%ldT", cores, (glong) threads);
+    cached = g_strdup_printf ("%d cpus / %ld threads", cores, (glong) threads);
   else
-    cached = g_strdup_printf ("%ldT", (glong) threads);
+    cached = g_strdup_printf ("%ld threads", (glong) threads);
   return cached;
 }
 
