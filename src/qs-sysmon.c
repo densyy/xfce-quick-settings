@@ -203,7 +203,7 @@ sysmon_refresh (QuickSettings *qs)
       guint64 total = total_kb * 1024;
       gdouble frac = (gdouble) used / (gdouble) total;
 
-      text = g_strdup_printf ("%.1f/%.1f GB",
+      text = g_strdup_printf ("%.2f / %.2f GB",
                               used / 1073741824.0, total / 1073741824.0);
       gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
       g_free (text);
