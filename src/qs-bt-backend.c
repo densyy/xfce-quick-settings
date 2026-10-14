@@ -162,7 +162,7 @@ bt_apply_filtered_devices (GList    **devs,
   if (output == NULL)
     return;
 
-  lines = g_strsplit (output, "\\n", -1);
+  lines = g_strsplit (output, "\n", -1);
   for (i = 0; lines[i] != NULL; i++)
     {
       gchar    **parts;
@@ -232,7 +232,7 @@ list_bt_devices (void)
   output = run_command ("bluetoothctl --timeout 1 devices");
   if (output != NULL)
     {
-      lines = g_strsplit (output, "\\n", -1);
+      lines = g_strsplit (output, "\n", -1);
       for (i = 0; lines[i] != NULL; i++)
         {
           gchar    **parts;
