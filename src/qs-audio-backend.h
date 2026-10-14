@@ -11,6 +11,7 @@
 AudioBackend  audio_get_backend_cached  (void);
 gboolean      audio_have_amixer_avail   (void);
 void          set_volume_percent        (gint value);
+void          set_source_volume_percent (gint value);
 const gchar  *volume_icon_for_level     (gint percent);
 void          audio_dev_free            (gpointer data);
 AudioDev     *audio_dev_new             (const gchar *id,

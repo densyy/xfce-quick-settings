@@ -8,6 +8,7 @@ typedef struct
   QuickSettings *qs;
   AudioBackend   backend;
   gboolean       use_amixer;
+  gboolean       is_source;
 } AudioVolReq;
 
 static void
@@ -37,27 +38,44 @@ audio_volume_done (const gchar *output,
     }
   if (!qs->dead)
     {
-      qs->updating = TRUE;
-      value = (value > 150) ? 150 : value;
-      if (value >= 0)
+      GtkWidget *target_scale = req->is_source ? qs->audio_in_vol_scale : qs->audio_out_vol_scale;
+       GtkWidget *target_icon = req->is_source ? qs->audio_in_vol_icon : qs->audio_out_vol_icon;
+
+       if (target_scale == NULL)
+        target_scale = qs->vol_scale;
+       if (target_icon == NULL)
+        target_icon = qs->vol_icon;
+
+       qs->updating = TRUE;
+       value = (value > 150) ? 150 : value;
+       if (value >= 0)
         {
-          gtk_range_set_value (GTK_RANGE (qs->vol_scale), value);
-          gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
-                                        volume_icon_for_level (value),
-                                        GTK_ICON_SIZE_LARGE_TOOLBAR);
-          gtk_widget_set_sensitive (qs->vol_scale, TRUE);
-          gtk_widget_set_tooltip_text (qs->vol_scale,
+          gtk_range_set_value (GTK_RANGE (target_scale), value);
+           if (target_icon != NULL)
+            gtk_image_set_from_icon_name (GTK_IMAGE (target_icon),
+                                          volume_icon_for_level (value),
+                                          GTK_ICON_SIZE_LARGE_TOOLBAR);
+           gtk_widget_set_sensitive (target_scale, TRUE);
+           gtk_widget_set_tooltip_text (target_scale,
                                        value > 100
                                        ? "Volume (boosted above 100%)"
                                        : "Volume");
+           if (!req->is_source && qs->vol_scale != NULL && qs->vol_scale != target_scale)
+            {
+              gtk_range_set_value (GTK_RANGE (qs->vol_scale), value);
+               if (qs->vol_icon != NULL)
+                gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
+                                              volume_icon_for_level (value),
+                                              GTK_ICON_SIZE_LARGE_TOOLBAR);
+            }
         }
       else
         {
-          gtk_widget_set_sensitive (qs->vol_scale, FALSE);
-          gtk_widget_set_tooltip_text (qs->vol_scale, "Volume unavailable");
+          gtk_widget_set_sensitive (target_scale, FALSE);
+           gtk_widget_set_tooltip_text (target_scale, "Volume unavailable");
         }
       qs->updating = FALSE;
-    }
+     }
   qs_unref (qs);
   g_free (req);
 }
@@ -387,6 +405,49 @@ on_source_changed (GtkComboBox *combo,
   if (id == NULL || *id == '\0' || g_strcmp0 (id, "none") == 0)
     return;
   set_default_source (qs, id);
+void audio_refresh_input_volume (QuickSettings *qs);
+}
+
+void audio_refresh_input_volume (QuickSettings *qs);
+static void
+on_sink_volume_changed (GtkRange *range,
+                       gpointer  user_data)
+{
+  QuickSettings *qs = user_data;
+  if (qs->updating)
+    return;
+  {
+    gint value = (gint) (gtk_range_get_value (range) + 0.5);
+    set_volume_percent (value);
+    if (qs->audio_out_vol_icon != NULL)
+      gtk_image_set_from_icon_name (GTK_IMAGE (qs->audio_out_vol_icon),
+                                    volume_icon_for_level (value),
+                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
+    if (qs->audio_out_vol_scale != NULL)
+      gtk_widget_set_tooltip_text (qs->audio_out_vol_scale,
+                                   value > 100
+                                   ? "Volume (boosted above 100%)"
+                                   : "Volume");
+  }
+}
+
+static void
+on_source_volume_changed (GtkRange *range,
+                          gpointer  user_data)
+{
+  QuickSettings *qs = user_data;
+  if (qs->updating)
+    return;
+  {
+    gint value = (gint) (gtk_range_get_value (range) + 0.5);
+    set_source_volume_percent (value);
+    if (qs->audio_in_vol_icon != NULL)
+      gtk_image_set_from_icon_name (GTK_IMAGE (qs->audio_in_vol_icon),
+                                    volume_icon_for_level (value),
+                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
+    if (qs->audio_in_vol_scale != NULL)
+      gtk_widget_set_tooltip_text (qs->audio_in_vol_scale, "Input volume");
+  }
 }
 
 static void
@@ -397,6 +458,8 @@ on_audio_tile_clicked (GtkButton *button,
 
   (void) button;
   audio_refresh_volume (qs);
+  audio_refresh_input_volume (qs);
+
   audio_refresh_devices (qs);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "audio");
 }
@@ -441,13 +504,19 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
 
   audio_page = make_sub_page ("Audio devices", &audio_back);
   out_grid = make_group (audio_page, "Output");
-  qs->sink_combo = make_device_row (out_grid, 0, "audio-speakers-symbolic",
-                                    "Audio output device");
+  make_slider_row (out_grid, 0, 150, "audio-volume-high-symbolic", "Output volume",
+ & qs->audio_out_vol_icon, & qs->audio_out_vol_scale); 
+  gtk_scale_add_mark (GTK_SCALE (qs->audio_out_vol_scale), 100.0, GTK_POS_BOTTOM, "100%"); 
+  qs->sink_combo = make_device_row (out_grid, 1, "audio-speakers-symbolic",
+                                  "Audio output device"); 
   ui_add_separator (audio_page);
   in_grid = make_group (audio_page, "Input");
-  qs->source_combo = make_device_row (in_grid, 0,
+  make_slider_row (in_grid, 0, 150, "audio-input-microphone-symbolic", "Input volume",
+ & qs->audio_in_vol_icon, & qs->audio_in_vol_scale); 
+  gtk_scale_add_mark (GTK_SCALE (qs->audio_in_vol_scale), 100.0, GTK_POS_BOTTOM, "100%"); 
+  qs->source_combo = make_device_row (in_grid, 1,
                                       "audio-input-microphone-symbolic",
-                                      "Audio input device");
+                                      "Audio input device"); 
   gtk_stack_add_named (GTK_STACK (stack), audio_page, "audio");
   g_signal_connect (audio_back, "clicked",
                     G_CALLBACK (on_audio_back_clicked), qs);
@@ -458,10 +527,48 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                     G_CALLBACK (on_sink_changed), qs);
   g_signal_connect (qs->source_combo, "changed",
                     G_CALLBACK (on_source_changed), qs);
+  g_signal_connect (qs->audio_out_vol_scale, "value-changed",
+                    G_CALLBACK (on_sink_volume_changed), qs);
+  g_signal_connect (qs->audio_in_vol_scale, "value-changed",
+                    G_CALLBACK (on_source_volume_changed), qs);
 }
 
 /* Refresh slider position/icon. Async de 1 comando do backend cacheado;
  * nunca spawna sync na UI. */
+void
+audio_refresh_input_volume (QuickSettings *qs)
+{
+  AudioBackend backend = audio_get_backend_cached ();
+  AudioVolReq *req;
+  const gchar *cmd;
+
+  qs->audio_backend = backend;
+  if (backend == AUDIO_PACTL)
+    cmd = "pactl get-source-volume @DEFAULT_SOURCE@";
+  else if (backend == AUDIO_WPCTL)
+    cmd = "wpctl get-volume @DEFAULT_SOURCE@";
+  else if (audio_have_amixer_avail ())
+    cmd = "amixer get Capture";
+  else
+    {
+      if (qs->audio_in_vol_scale != NULL)
+        {
+          qs->updating = TRUE;
+          gtk_widget_set_sensitive (qs->audio_in_vol_scale, FALSE);
+          gtk_widget_set_tooltip_text (qs->audio_in_vol_scale, "Volume unavailable");
+          qs->updating = FALSE;
+        }
+      return;
+    }
+  req = g_new0 (AudioVolReq, 1);
+  req->qs = qs;
+  req->backend = backend;
+  req->use_amixer = (backend == AUDIO_NONE && audio_have_amixer_avail ());
+  req->is_source = TRUE;
+  qs_ref (qs);
+  run_command_async (cmd, audio_volume_done, req);
+}
+
 void
 audio_refresh_volume (QuickSettings *qs)
 {

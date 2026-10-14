@@ -75,6 +75,32 @@ set_volume_percent (gint value)
   g_free (cmd);
 }
 
+
+
+void
+set_source_volume_percent (gint value)
+{
+  gchar *cmd;
+
+  value = CLAMP (value, 0, 150);
+  switch (audio_get_backend_cached ())
+    {
+    case AUDIO_PACTL:
+      cmd = g_strdup_printf ("pactl set-source-volume @DEFAULT_SOURCE@ %d%%", value);
+      break;
+    case AUDIO_WPCTL:
+      cmd = g_strdup_printf ("wpctl set-volume @DEFAULT_AUDIO_SOURCE@ %d%%", value);
+      break;
+    default:
+      if (!audio_have_amixer)
+        return;
+      cmd = g_strdup_printf ("amixer -q sset Capture %d%%", CLAMP (value, 0, 100));
+      break;
+    }
+  spawn_command (cmd);
+  g_free (cmd);
+}
+
 const gchar *
 volume_icon_for_level (gint percent)
 {
