@@ -92,12 +92,14 @@ make_nav_tile (GtkWidget    *box,
   gtk_container_set_border_width (GTK_CONTAINER (hbox), QS_CONTENT_PAD);
   ui_add_class (title_label, "qs-title");
   gtk_widget_set_halign (title_label, GTK_ALIGN_START);
+  gtk_label_set_xalign (GTK_LABEL (title_label), 0.0);
   gtk_box_pack_start (GTK_BOX (vbox), title_label, FALSE, FALSE, 0);
   if (sub_out != NULL)
     {
       sub = gtk_label_new ("");
       ui_add_class (sub, "qs-sub");
       gtk_widget_set_halign (sub, GTK_ALIGN_START);
+      gtk_label_set_xalign (GTK_LABEL (sub), 0.0);
       gtk_label_set_ellipsize (GTK_LABEL (sub), PANGO_ELLIPSIZE_END);
       gtk_label_set_width_chars (GTK_LABEL (sub), 12);
       gtk_label_set_max_width_chars (GTK_LABEL (sub), 14);

@@ -100,8 +100,10 @@ make_night_button (GtkWidget   *box,
   gtk_container_set_border_width (GTK_CONTAINER (hbox), QS_TIGHT_GAP);
   ui_add_class (text, "qs-title");
   gtk_widget_set_halign (text, GTK_ALIGN_START);
+  gtk_label_set_xalign (GTK_LABEL (text), 0.0);
   ui_add_class (sub, "qs-sub");
   gtk_widget_set_halign (sub, GTK_ALIGN_START);
+  gtk_label_set_xalign (GTK_LABEL (sub), 0.0);
   gtk_box_pack_start (GTK_BOX (vbox), text, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (vbox), sub, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (hbox), image, FALSE, FALSE, 0);
