@@ -367,10 +367,17 @@ wifi_fill_list (QuickSettings *qs,
   g_hash_table_destroy (wanted);
   g_hash_table_destroy (existing);
 
+  g_free (qs->wifi_ssid);
   if (active_ssid != NULL)
-    gtk_label_set_text (GTK_LABEL (qs->wifi_sub), active_ssid);
+    {
+      qs->wifi_ssid = g_strdup (active_ssid);
+      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), active_ssid);
+    }
   else
-    gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "Not connected");
+    {
+      qs->wifi_ssid = NULL;
+      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "Not connected");
+    }
   gtk_widget_show_all (qs->wifi_list);
 }
 
@@ -703,7 +710,10 @@ wifi_update_tile (QuickSettings *qs)
   gtk_widget_set_sensitive (qs->wifi_tile, avail);
   gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
                       !avail ? "Unavailable"
-                      : qs->wifi_on ? "On" : "Off");
+                      : qs->wifi_on ? (qs->wifi_ssid != NULL
+                                       && qs->wifi_ssid[0] != '\0'
+                                       ? qs->wifi_ssid : "On")
+                                    : "Off");
 }
 
 /* Async correction probe (mirrors bt_refresh_tile_async in
@@ -732,7 +742,10 @@ wifi_tile_probe_idle (gpointer data)
       gtk_widget_set_sensitive (qs->wifi_tile, p->avail);
       gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
                           !p->avail ? "Unavailable"
-                          : p->on ? "On" : "Off");
+                          : p->on ? (qs->wifi_ssid != NULL
+                                     && qs->wifi_ssid[0] != '\0'
+                                     ? qs->wifi_ssid : "On")
+                                  : "Off");
       qs_cache_schedule_save (qs);
     }
   g_free (p);

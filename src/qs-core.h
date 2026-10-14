@@ -76,6 +76,8 @@ typedef struct
   gboolean         wifi_on;
   gboolean         bt_on; /* live-probed on popup open (async, see qs-net) */
   gchar           *bt_controller; /* owned MAC or NULL */
+  gchar           *wifi_ssid; /* owned connected SSID, or NULL */
+  gchar           *bt_connected_name; /* owned connected BT device name, or NULL */
   gboolean         scanning_wifi;
   gboolean         scanning_bt;
   gboolean         bt_tile_probe; /* tile-only BT probe in flight */

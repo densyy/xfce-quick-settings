@@ -265,10 +265,18 @@ bt_fill_list (QuickSettings *qs,
                          GINT_TO_POINTER (dev->paired));
       gtk_container_add (GTK_CONTAINER (qs->bt_list), row);
     }
+  g_free (qs->bt_connected_name);
   if (connected_name != NULL)
-    gtk_label_set_text (GTK_LABEL (qs->bt_sub), connected_name);
-  else if (devs != NULL)
-    gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+    {
+      qs->bt_connected_name = g_strdup (connected_name);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), connected_name);
+    }
+  else
+    {
+      qs->bt_connected_name = NULL;
+      if (devs != NULL)
+        gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+    }
   gtk_widget_show_all (qs->bt_list);
   bt_filling = FALSE;
 }
@@ -334,7 +342,11 @@ bt_update_row (QuickSettings *qs,
           const gchar *nm = g_object_get_data (G_OBJECT (l->data), "qs-name");
 
           if (nm != NULL)
-            gtk_label_set_text (GTK_LABEL (qs->bt_sub), nm);
+            {
+              gtk_label_set_text (GTK_LABEL (qs->bt_sub), nm);
+              g_free (qs->bt_connected_name);
+              qs->bt_connected_name = g_strdup (nm);
+            }
         }
       else
         {
@@ -342,7 +354,11 @@ bt_update_row (QuickSettings *qs,
           const gchar *sub = gtk_label_get_text (GTK_LABEL (qs->bt_sub));
 
           if (nm != NULL && sub != NULL && g_strcmp0 (nm, sub) == 0)
-            gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+            {
+              gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+              g_free (qs->bt_connected_name);
+              qs->bt_connected_name = NULL;
+            }
         }
       found = TRUE;
       break;
@@ -1014,6 +1030,7 @@ typedef struct
 {
   QuickSettings *qs;
   gchar         *controller; /* owned MAC or NULL */
+  gchar         *connected_name;
   gboolean       powered;
 } BtTileProbe;
 
@@ -1036,11 +1053,32 @@ bt_tile_probe_idle (gpointer data)
       gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), qs->bt_on);
       qs->updating = FALSE;
       set_tile_active (qs->bt_tile, qs->bt_on);
-      gtk_label_set_text (GTK_LABEL (qs->bt_sub),
-                          qs->bt_controller == NULL ? "No adapter"
-                          : qs->bt_on ? "On" : "Off");
+
+      g_free (qs->bt_connected_name);
+      if (qs->bt_controller == NULL)
+        {
+          qs->bt_connected_name = NULL;
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "No adapter");
+        }
+      else if (!qs->bt_on)
+        {
+          qs->bt_connected_name = NULL;
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Off");
+        }
+      else if (p->connected_name != NULL)
+        {
+          qs->bt_connected_name = g_strdup (p->connected_name);
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub),
+                              qs->bt_connected_name);
+        }
+      else
+        {
+          qs->bt_connected_name = NULL;
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+        }
     }
   g_free (p->controller);
+  g_free (p->connected_name);
   g_free (p);
   qs_unref (qs);
   return G_SOURCE_REMOVE;
@@ -1058,7 +1096,27 @@ bt_tile_probe_thread (gpointer data)
     }
   p->controller = bt_get_controller ();
   if (p->controller != NULL && !p->qs->dead)
-    p->powered = bt_powered (p->controller);
+    {
+      p->powered = bt_powered (p->controller);
+      if (p->powered && !p->qs->dead)
+        {
+          GList *devs = list_bt_devices ();
+          GList *l;
+
+          for (l = devs; l != NULL; l = l->next)
+            {
+              BtDevice *dev = l->data;
+
+              if (dev != NULL && dev->connected
+                  && dev->name != NULL)
+                {
+                  p->connected_name = g_strdup (dev->name);
+                  break;
+                }
+            }
+          g_list_free_full (devs, bt_device_free);
+        }
+    }
   g_idle_add (bt_tile_probe_idle, p);
   return NULL;
 }

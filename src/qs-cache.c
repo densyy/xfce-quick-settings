@@ -132,12 +132,31 @@ qs_cache_save (QuickSettings *qs)
 
   g_key_file_set_boolean (kf, "wifi", "on", qs->wifi_on);
   g_key_file_set_int64 (kf, "wifi", "on_ts", now);
-  ensure_present_str (kf, "wifi", "ssid");
-  ensure_present_ts (kf, "wifi", "ssid_ts");
+  if (qs->wifi_on && qs->wifi_ssid != NULL && qs->wifi_ssid[0] != '\0')
+    {
+      g_key_file_set_string (kf, "wifi", "ssid", qs->wifi_ssid);
+      g_key_file_set_int64 (kf, "wifi", "ssid_ts", now);
+    }
+  else
+    {
+      ensure_present_str (kf, "wifi", "ssid");
+      ensure_present_ts (kf, "wifi", "ssid_ts");
+    }
 
   g_key_file_set_boolean (kf, "bluetooth", "powered", qs->bt_on);
   g_key_file_set_int64 (kf, "bluetooth", "powered_ts", now);
   ensure_present_bool (kf, "bluetooth", "connected", FALSE);
+  if (qs->bt_on && qs->bt_connected_name != NULL && qs->bt_connected_name[0] != '\0')
+    {
+      g_key_file_set_string (kf, "bluetooth", "connected_name",
+                              qs->bt_connected_name);
+      g_key_file_set_int64 (kf, "bluetooth", "connected_name_ts", now);
+    }
+  else
+    {
+      ensure_present_str (kf, "bluetooth", "connected_name");
+      ensure_present_ts (kf, "bluetooth", "connected_name_ts");
+    }
   ensure_present_ts (kf, "bluetooth", "connected_ts");
 
   ensure_present_int (kf, "audio", "volume", 50);
@@ -244,7 +263,11 @@ qs_cache_load (QuickSettings *qs)
       && read_ts (kf, "wifi", "ssid_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
       && qs->wifi_sub != NULL)
-    gtk_label_set_text (GTK_LABEL (qs->wifi_sub), str);
+    {
+      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), str);
+      g_free (qs->wifi_ssid);
+      qs->wifi_ssid = g_strdup (str);
+    }
   g_free (str);
   str = NULL;
 
@@ -267,11 +290,29 @@ qs_cache_load (QuickSettings *qs)
   else if (qs->bt_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->bt_sub), "…");
 
-  if (read_bool (kf, "bluetooth", "connected", &connected)
-      && read_ts (kf, "bluetooth", "connected_ts", &ts)
+  str = g_key_file_get_string (kf, "bluetooth", "connected_name", &err);
+  if (err != NULL)
+    {
+      g_clear_error (&err);
+      g_free (str);
+      str = NULL;
+    }
+  if (str != NULL && *str != '\0'
+      && read_ts (kf, "bluetooth", "connected_name_ts", &ts)
       && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
-      && connected && qs->bt_sub != NULL)
+      && qs->bt_sub != NULL)
+    {
+      g_free (qs->bt_connected_name);
+      qs->bt_connected_name = g_strdup (str);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), str);
+    }
+  else if (read_bool (kf, "bluetooth", "connected", &connected)
+           && read_ts (kf, "bluetooth", "connected_ts", &ts)
+           && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
+           && connected && qs->bt_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Connected");
+  g_free (str);
+  str = NULL;
 
   if (read_int (kf, "audio", "volume", &volume) && qs->vol_scale != NULL)
     {
