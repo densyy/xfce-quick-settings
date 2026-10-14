@@ -487,7 +487,7 @@ on_bt_scan_clicked (GtkButton *button,
   gtk_label_set_text (GTK_LABEL (qs->bt_status), "Scanning for devices…");
   /* Discovery stops by itself when bluetoothctl exits after the timeout. */
   qs_ref (qs);
-  run_command_async ("bluetoothctl --timeout 10 scan on", bt_scan_done, qs);
+  run_command_async ("bluetoothctl --timeout 6 scan on", bt_scan_done, qs);
 }
 
 static gboolean
@@ -567,7 +567,7 @@ bt_link_untrack (BtLink *l)
  * still shows the old state. Retrying the `info` read a few times on
  * the main loop closes that race; without it the row keeps the stale
  * "Connected" label until the next manual Scan. */
-#define BT_VERIFY_MAX_TRIES 5
+#define BT_VERIFY_MAX_TRIES 8
 #define BT_VERIFY_DELAY_MS 800
 
 static const gchar *
@@ -698,7 +698,7 @@ bt_verify_timeout (gpointer data)
       bt_link_finish (l);
       return G_SOURCE_REMOVE;
     }
-  cmd = g_strdup_printf ("bluetoothctl --timeout 2 info %s", l->mac);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", l->mac);
   run_command_async (cmd, bt_link_verify_done, l);
   g_free (cmd);
   return G_SOURCE_REMOVE;
@@ -749,6 +749,7 @@ bt_link_verify_done (const gchar *output,
         }
       else
         {
+          bt_start_load_thread (l->qs);
           bt_link_fail (l, "disconnect", NULL);
         }
       return;
@@ -774,6 +775,7 @@ bt_link_verify_done (const gchar *output,
     {
       gchar *detail = bt_first_detail (output, errout);
 
+      bt_start_load_thread (l->qs);
       bt_link_fail (l, "connect", detail);
       g_free (detail);
     }
@@ -823,14 +825,14 @@ bt_link_run_next (BtLink *l)
       /* All verbs done: only trust `info` saying Connected yes/no. */
       gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
       l->verify_tries = BT_VERIFY_MAX_TRIES;
-      cmd = g_strdup_printf ("bluetoothctl --timeout 2 info %s", l->mac);
+      cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", l->mac);
       run_command_async (cmd, bt_link_verify_done, l);
       g_free (cmd);
       return;
     }
   gtk_label_set_text (GTK_LABEL (l->qs->bt_status),
                       bt_doing_label (l->verbs[l->idx]));
-  cmd = g_strdup_printf ("bluetoothctl --timeout 20 %s %s",
+  cmd = g_strdup_printf ("bluetoothctl --timeout 10 %s %s",
                          l->verbs[l->idx], l->mac);
   run_command_async (cmd, bt_link_done, l);
   g_free (cmd);
@@ -920,7 +922,7 @@ bt_toggle_device (QuickSettings *qs,
   bt_link_track (l);
   qs_ref (qs);
   gtk_label_set_text (GTK_LABEL (qs->bt_status), "Reading device…");
-  cmd = g_strdup_printf ("bluetoothctl --timeout 2 info %s", l->mac);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", l->mac);
   run_command_async (cmd, bt_toggle_info_done, l);
   g_free (cmd);
 }

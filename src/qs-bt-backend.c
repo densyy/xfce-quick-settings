@@ -17,7 +17,7 @@ bt_device_free (gpointer data)
 gchar *
 bt_get_controller (void)
 {
-  gchar  *output = run_command ("bluetoothctl --timeout 2 list");
+  gchar  *output = run_command ("bluetoothctl --timeout 1 list");
   gchar **lines;
   gchar  *mac = NULL;
   gint    i;
@@ -51,7 +51,7 @@ bt_powered (const gchar *controller)
 
   if (controller == NULL)
     return FALSE;
-  cmd = g_strdup_printf ("bluetoothctl --timeout 2 show %s", controller);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 1 show %s", controller);
   output = run_command (cmd);
   if (output != NULL)
     {
@@ -65,7 +65,7 @@ bt_powered (const gchar *controller)
 void
 bt_set_powered (gboolean on)
 {
-  gchar *cmd = g_strdup_printf ("bluetoothctl --timeout 2 power %s",
+  gchar *cmd = g_strdup_printf ("bluetoothctl --timeout 1 power %s",
                                 on ? "on" : "off");
 
   spawn_command (cmd);
@@ -76,7 +76,7 @@ bt_set_powered (gboolean on)
 void
 bt_fill_flags (BtDevice *dev)
 {
-  gchar *cmd = g_strdup_printf ("bluetoothctl --timeout 2 info %s",
+  gchar *cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s",
                                 dev->mac);
   gchar *output = run_command (cmd);
 
@@ -136,21 +136,40 @@ bt_output_is_error (const gchar *output,
   return FALSE;
 }
 
-GList *
-list_bt_devices (void)
+typedef enum
 {
-  gchar  *output = run_command ("bluetoothctl --timeout 2 devices");
+  BT_FLAG_PAIRED,
+  BT_FLAG_TRUSTED,
+  BT_FLAG_CONNECTED
+} BtFlagKind;
+
+/* Applies one filtered listing (`devices Paired|Trusted|Connected`) to `devs`,
+ * creating entries that are not yet present and setting the matching flag.
+ * This avoids per-device `info` calls, which dominate the load latency. */
+static void
+bt_apply_filtered_devices (GList    **devs,
+                          const gchar *filter,
+                          BtFlagKind   flag)
+{
+  gchar  *cmd;
+  gchar  *output;
   gchar **lines;
-  GList  *devs = NULL;
   gint    i;
 
+  cmd = g_strdup_printf ("bluetoothctl --timeout 1 devices %s", filter);
+  output = run_command (cmd);
+  g_free (cmd);
   if (output == NULL)
-    return NULL;
-  lines = g_strsplit (output, "\n", -1);
+    return;
+
+  lines = g_strsplit (output, "\\n", -1);
   for (i = 0; lines[i] != NULL; i++)
     {
       gchar    **parts;
-      BtDevice  *dev;
+      const gchar *mac;
+      const gchar *name;
+      BtDevice  *dev = NULL;
+      GList     *l;
 
       if (!g_str_has_prefix (lines[i], "Device "))
         continue;
@@ -160,15 +179,88 @@ list_bt_devices (void)
           g_strfreev (parts);
           continue;
         }
-      dev = g_new0 (BtDevice, 1);
-      dev->mac = g_strdup (parts[1]);
-      dev->name = g_strdup (parts[2] != NULL && *parts[2] != '\0'
-                            ? parts[2] : parts[1]);
-      bt_fill_flags (dev);
-      devs = g_list_prepend (devs, dev);
+      mac = parts[1];
+      name = (parts[2] != NULL && *parts[2] != '\0') ? parts[2] : parts[1];
+
+      for (l = *devs; l != NULL; l = l->next)
+        {
+          BtDevice *candidate = l->data;
+
+          if (g_strcmp0 (candidate->mac, mac) == 0)
+            {
+              dev = candidate;
+              break;
+            }
+        }
+      if (dev == NULL)
+        {
+          dev = g_new0 (BtDevice, 1);
+          dev->mac = g_strdup (mac);
+          dev->name = g_strdup (name);
+          *devs = g_list_append (*devs, dev);
+        }
+      else if (dev->name == NULL)
+        dev->name = g_strdup (name);
+
+      switch (flag)
+        {
+        case BT_FLAG_PAIRED:
+          dev->paired = TRUE;
+          break;
+        case BT_FLAG_TRUSTED:
+          dev->trusted = TRUE;
+          break;
+        case BT_FLAG_CONNECTED:
+          dev->connected = TRUE;
+          break;
+        }
       g_strfreev (parts);
     }
   g_strfreev (lines);
   g_free (output);
-  return g_list_reverse (devs);
+}
+
+GList *
+list_bt_devices (void)
+{
+  gchar  *output;
+  gchar **lines;
+  GList  *devs = NULL;
+  gint    i;
+
+  /* Base list of (recently) known devices, without per-device `info`. */
+  output = run_command ("bluetoothctl --timeout 1 devices");
+  if (output != NULL)
+    {
+      lines = g_strsplit (output, "\\n", -1);
+      for (i = 0; lines[i] != NULL; i++)
+        {
+          gchar    **parts;
+          BtDevice  *dev;
+
+          if (!g_str_has_prefix (lines[i], "Device "))
+            continue;
+          parts = g_strsplit (lines[i], " ", 3);
+          if (parts[1] == NULL || *parts[1] == '\0')
+            {
+              g_strfreev (parts);
+              continue;
+            }
+          dev = g_new0 (BtDevice, 1);
+          dev->mac = g_strdup (parts[1]);
+          dev->name = g_strdup (parts[2] != NULL && *parts[2] != '\0'
+                                ? parts[2] : parts[1]);
+          devs = g_list_append (devs, dev);
+          g_strfreev (parts);
+        }
+      g_strfreev (lines);
+      g_free (output);
+    }
+
+  /* Flags come from filtered listings; much cheaper than `info MAC`. */
+  bt_apply_filtered_devices (&devs, "Paired", BT_FLAG_PAIRED);
+  bt_apply_filtered_devices (&devs, "Trusted", BT_FLAG_TRUSTED);
+  bt_apply_filtered_devices (&devs, "Connected", BT_FLAG_CONNECTED);
+
+  return devs;
 }
