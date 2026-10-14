@@ -2,7 +2,7 @@
 #include "qs-sysmon-data.h"
 #include "qs-ui.h"
 
-#define SYSMON_INTERVAL_S 10
+#define SYSMON_INTERVAL_S 2
 
 /* VIEW (cards/refresh/tick): abaixo só GTK.
  * DATA (acima) nunca toca em widget; VIEW nunca faz parse/stat direto
