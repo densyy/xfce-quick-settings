@@ -689,10 +689,6 @@ wifi_show_page (QuickSettings *qs)
 {
   if (!wifi_available ())
     return;
-  qs->updating = TRUE;
-  qs->wifi_on = wifi_enabled_sync ();
-  gtk_switch_set_active (GTK_SWITCH (qs->wifi_switch), qs->wifi_on);
-  qs->updating = FALSE;
   set_tile_active (qs->wifi_tile, qs->wifi_on);
   gtk_stack_set_visible_child_name (GTK_STACK (qs->stack), "wifi");
   wifi_load_async (qs, FALSE);
