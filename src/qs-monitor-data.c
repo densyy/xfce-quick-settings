@@ -172,7 +172,7 @@ qs_display_snap_new (const gchar *output)
     }
   g_strfreev (lines);
 
-  snap->n_connected = g_list_length (snap->mons);
+  snap->n_connected = (gint) g_list_length (snap->mons);
   for (GList *l = snap->mons; l != NULL; l = l->next)
     {
       QsMonInfo *m = l->data;

@@ -204,7 +204,7 @@ sysmon_refresh (QuickSettings *qs)
       gdouble frac = (gdouble) used / (gdouble) total;
 
       text = g_strdup_printf ("%.2f / %.2f GB",
-                              used / 1073741824.0, total / 1073741824.0);
+                              (gdouble) used / 1073741824.0, (gdouble) total / 1073741824.0);
       gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
       g_free (text);
       sysmon_set_bar (qs->sysmon_ram_bar, qs->sysmon_ram_pct, frac);

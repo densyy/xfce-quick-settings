@@ -160,7 +160,7 @@ sysmon_bytes_text (guint64 bytes,
                    guint64 total)
 {
   return g_strdup_printf ("%.2f / %.2f GB",
-                          bytes / 1073741824.0, total / 1073741824.0);
+                          (gdouble) bytes / 1073741824.0, (gdouble) total / 1073741824.0);
 }
 
 /* /proc/mounts escapes space/tab/newline/backslash as octal. */
