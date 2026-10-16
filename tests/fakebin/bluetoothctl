@@ -1,0 +1,30 @@
+#!/bin/sh
+# Fake bluetoothctl para testes: responde list/show/info/devices/power e loga argv.
+echo "$*" >> "${QS_FAKE_LOG:-/dev/null}"
+if [ "$1" = "--timeout" ]; then shift 2; fi
+case "$1" in
+  list)
+    printf 'Controller AA:BB:CC:DD:EE:FF BlueZ 5\n'
+    ;;
+  show)
+    printf 'Controller AA:BB:CC:DD:EE:FF\n\tPowered: yes\n\tDiscoverable: no\n'
+    ;;
+  info)
+    printf 'Device %s\n\tName: FakeBuds\n\tAlias: FakeBuds\n\tPaired: yes\n\tTrusted: no\n\tBlocked: no\n\tConnected: yes\n' "$2"
+    ;;
+  devices)
+    case "$2" in
+      Paired) printf 'Device 11:22:33:44:55:66 Keyboard\n' ;;
+      Trusted) printf 'Device AA:AA:AA:AA:AA:01 Mouse\n' ;;
+      Connected) printf 'Device BB:BB:BB:BB:BB:02 Headset\n' ;;
+      *) printf 'Device 11:22:33:44:55:66 Keyboard\n' ;;
+    esac
+    ;;
+  power)
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+exit 0

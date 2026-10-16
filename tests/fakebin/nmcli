@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake nmcli para testes: responde `radio wifi` e loga todo argv em $QS_FAKE_LOG.
+echo "$*" >> "${QS_FAKE_LOG:-/dev/null}"
+if [ "$1" = "radio" ] && [ "$2" = "wifi" ] && [ $# -eq 2 ]; then
+  printf '%s\n' "${QS_FAKE_WIFI_STATE:-enabled}"
+  exit 0
+fi
+exit 0

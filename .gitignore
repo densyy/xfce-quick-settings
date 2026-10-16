@@ -1,1 +1,14 @@
 /build/
+# test binaries (built by make test)
+tests/test-async
+tests/test-audio
+tests/test-bt
+tests/test-brightness
+tests/test-cache
+tests/test-lifecycle
+tests/test-monitor-data
+tests/test-notify-store
+tests/test-power
+tests/test-sysmon-data
+tests/test-util
+tests/test-wifi
