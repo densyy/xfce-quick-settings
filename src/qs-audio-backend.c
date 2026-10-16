@@ -119,7 +119,7 @@ volume_icon_for_level (gint percent)
 
 /* Maps pactl device name -> Description from "pactl list sinks/sources".
  * block_prefix is "Sink #" or "Source #". */
-static GHashTable *
+GHashTable *
 parse_pactl_descriptions (const gchar *output,
                           const gchar *block_prefix)
 {

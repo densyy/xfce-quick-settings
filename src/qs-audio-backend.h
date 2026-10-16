@@ -18,6 +18,8 @@ AudioDev     *audio_dev_new             (const gchar *id,
                                         const gchar *label,
                                         gboolean     is_default);
 GHashTable   *parse_pactl_monitor_sources (const gchar *output);
+GHashTable   *parse_pactl_descriptions     (const gchar *output,
+                                            const gchar *block_prefix);
 gchar        *pactl_get_default         (const gchar *cmd);
 GList        *list_pactl_sinks          (void);
 GList        *list_pactl_sources        (void);
