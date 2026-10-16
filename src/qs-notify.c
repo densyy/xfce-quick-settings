@@ -355,7 +355,7 @@ notify_tile_probe_idle (gpointer data)
   NotifyTileProbe *p = data;
   QuickSettings   *qs = p->qs;
 
-  if (!qs->dead && p->seq == qs->cache_seq && p->ok)
+  if (!g_atomic_int_get (&qs->dead) && p->seq == qs->cache_seq && p->ok)
     {
       notify_cached_count = p->count;
       notify_cached_max = p->max_ts;
@@ -368,7 +368,7 @@ notify_tile_probe_idle (gpointer data)
       notify_set_tile_count (qs, p->count);
       qs_cache_schedule_save (qs);
     }
-  else if (!qs->dead && p->seq == qs->cache_seq && !p->ok && p->have_stat)
+  else if (!g_atomic_int_get (&qs->dead) && p->seq == qs->cache_seq && !p->ok && p->have_stat)
     {
       /* DB ilegível mas stat ok: registra stat p/ não repetir sqlite. */
       notify_cached_mtime = p->st.st_mtime;
@@ -402,14 +402,24 @@ notify_refresh_tile_async (QuickSettings *qs)
 {
   NotifyTileProbe *p;
 
-  if (qs == NULL || qs->dead)
+  if (qs == NULL || g_atomic_int_get (&qs->dead))
     return;
   p = g_new0 (NotifyTileProbe, 1);
   p->qs = qs;
   p->seq = ++qs->cache_seq;
   qs_ref (qs);
-  g_thread_unref (g_thread_new ("qs-notify-tile",
-                                notify_tile_probe_thread, p));
+  {
+    GThread *t = g_thread_try_new ("qs-notify-tile",
+                                   notify_tile_probe_thread, p, NULL);
+
+    if (t == NULL)
+      {
+        qs_unref (qs);
+        g_free (p);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 /* Refreshes tile always, list only when the "notices" page is showing
@@ -419,7 +429,7 @@ notify_refresh_visible (QuickSettings *qs)
 {
   const gchar *name;
 
-  if (qs->dead || !gtk_widget_get_visible (qs->popup))
+  if (g_atomic_int_get (&qs->dead) || !gtk_widget_get_visible (qs->popup))
     return;
   notify_update_tile (qs);
   /* T5: cached acima (instantâneo) + correção async; debounce de 500ms
@@ -481,7 +491,7 @@ on_notify_dir_changed (GFileMonitor      *monitor,
   (void) file;
   (void) other;
   (void) event;
-  if (qs->dead || !gtk_widget_get_visible (qs->popup))
+  if (g_atomic_int_get (&qs->dead) || !gtk_widget_get_visible (qs->popup))
     return;
   notify_schedule_refresh (qs);
 }
@@ -494,7 +504,7 @@ notify_poll_tick (gpointer data)
   QuickSettings *qs = data;
   const gchar   *name;
 
-  if (qs->dead || !gtk_widget_get_visible (qs->popup))
+  if (g_atomic_int_get (&qs->dead) || !gtk_widget_get_visible (qs->popup))
     {
       g_object_set_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL,
                          GUINT_TO_POINTER (0));
@@ -517,7 +527,7 @@ notify_poll_start (QuickSettings *qs)
   guint        id;
   const gchar *name;
 
-  if (qs->dead
+  if (g_atomic_int_get (&qs->dead)
       || g_object_get_data (G_OBJECT (qs->popup), NOTIFY_DATA_POLL) != NULL)
     return;
   if (!gtk_widget_get_visible (qs->popup))
@@ -553,7 +563,7 @@ on_notify_stack_child (GObject    *stack,
 
   (void) pspec;
   name = gtk_stack_get_visible_child_name (GTK_STACK (stack));
-  if (g_strcmp0 (name, "notices") == 0 && !qs->dead)
+  if (g_strcmp0 (name, "notices") == 0 && !g_atomic_int_get (&qs->dead))
     {
       notify_fill_list_if_changed (qs);
       notify_poll_start (qs);

@@ -50,7 +50,7 @@ qs_fade_tick_cb (GtkWidget     *widget,
   gdouble        p;
   gdouble        e;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs->fade_tick = 0;
       g_object_set_data (G_OBJECT (widget), "qs-fade-start", NULL);
@@ -233,7 +233,7 @@ quick_settings_free (XfcePanelPlugin *plugin,
 
   (void) plugin;
 
-  qs->dead = TRUE;
+  g_atomic_int_set (&qs->dead, TRUE);
   sysmon_stop (qs);
   power_stop (qs);
   net_cleanup ();

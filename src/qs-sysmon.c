@@ -356,7 +356,7 @@ sysmon_tick (gpointer data)
 {
   QuickSettings *qs = data;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs->sysmon_timer = 0;
       return G_SOURCE_REMOVE;

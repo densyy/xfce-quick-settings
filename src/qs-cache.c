@@ -216,7 +216,7 @@ qs_cache_load (QuickSettings *qs)
   GError *err = NULL;
   gboolean wifi_text_set = FALSE;
 
-  if (qs == NULL || qs->dead)
+  if (qs == NULL || g_atomic_int_get (&qs->dead))
     return;
   path = cache_path ();
   kf = g_key_file_new ();

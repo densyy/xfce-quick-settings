@@ -382,7 +382,7 @@ bt_load_thread (gpointer data)
 {
   BtResult *r = data;
 
-  if (r->qs->dead)
+  if (g_atomic_int_get (&r->qs->dead))
     {
       g_idle_add (bt_load_idle, r);
       return NULL;
@@ -390,7 +390,7 @@ bt_load_thread (gpointer data)
   r->controller = bt_get_controller ();
   if (r->controller != NULL)
     r->powered = bt_powered (r->controller);
-  if (r->powered && !r->qs->dead)
+  if (r->powered && !g_atomic_int_get (&r->qs->dead))
     r->devs = list_bt_devices ();
   g_idle_add (bt_load_idle, r);
   return NULL;
@@ -402,7 +402,7 @@ bt_load_idle (gpointer data)
   BtResult      *r = data;
   QuickSettings *qs = r->qs;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       g_list_free_full (r->devs, bt_device_free);
       g_free (r->controller);
@@ -463,7 +463,17 @@ bt_start_load_thread (QuickSettings *qs)
 
   r->qs = qs;
   qs_ref (qs);
-  g_thread_unref (g_thread_new ("qs-bt", bt_load_thread, r));
+  {
+    GThread *t = g_thread_try_new ("qs-bt", bt_load_thread, r, NULL);
+
+    if (t == NULL)
+      {
+        qs_unref (qs);
+        g_free (r);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 static void
@@ -477,7 +487,7 @@ bt_scan_done (const gchar *output,
   (void) output;
   (void) errout;
   (void) ok;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -511,7 +521,7 @@ bt_reload_timeout (gpointer data)
 {
   QuickSettings *qs = data;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return G_SOURCE_REMOVE;
@@ -680,7 +690,7 @@ bt_link_fail (BtLink      *l,
 {
   gchar *msg;
 
-  if (!l->qs->dead && !l->cancelled)
+  if (!g_atomic_int_get (&l->qs->dead) && !l->cancelled)
     {
       if (detail != NULL && *detail != '\0')
         msg = g_strdup_printf ("Failed to %s %s: %s", verb, l->name,
@@ -709,7 +719,7 @@ bt_verify_timeout (gpointer data)
   gchar  *cmd;
 
   l->verify_src = 0;
-  if (l->qs->dead || l->cancelled)
+  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
     {
       bt_link_finish (l);
       return G_SOURCE_REMOVE;
@@ -734,7 +744,7 @@ bt_link_verify_done (const gchar *output,
 
   (void) errout;
   (void) ok;
-  if (l->qs->dead || l->cancelled)
+  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
     {
       bt_link_finish (l);
       return;
@@ -806,7 +816,7 @@ bt_link_done (const gchar *output,
   BtLink      *l = user_data;
   const gchar *verb;
 
-  if (l->qs->dead || l->cancelled)
+  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
     {
       bt_link_finish (l);
       return;
@@ -831,7 +841,7 @@ bt_link_run_next (BtLink *l)
 {
   gchar *cmd;
 
-  if (l->qs->dead || l->cancelled)
+  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
     {
       bt_link_finish (l);
       return;
@@ -870,7 +880,7 @@ bt_toggle_info_done (const gchar *output,
 
   (void) errout;
   (void) ok;
-  if (l->qs->dead || l->cancelled)
+  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
     {
       bt_link_finish (l);
       return;
@@ -917,7 +927,7 @@ bt_toggle_device (QuickSettings *qs,
 
   if (row == NULL || !gtk_widget_get_sensitive (GTK_WIDGET (row)))
     return;
-  if (bt_filling || qs->dead)
+  if (bt_filling || g_atomic_int_get (&qs->dead))
     return;
   mac = g_object_get_data (G_OBJECT (row), "qs-mac");
   name = g_object_get_data (G_OBJECT (row), "qs-name");
@@ -1043,7 +1053,7 @@ bt_tile_probe_idle (gpointer data)
   qs->bt_tile_probe = FALSE;
   /* A full page load owns the widgets while it runs; it updates the
    * tile itself when done. */
-  if (!qs->dead && !qs->scanning_bt)
+  if (!g_atomic_int_get (&qs->dead) && !qs->scanning_bt)
     {
       g_free (qs->bt_controller);
       qs->bt_controller = p->controller;
@@ -1089,16 +1099,16 @@ bt_tile_probe_thread (gpointer data)
 {
   BtTileProbe *p = data;
 
-  if (p->qs->dead)
+  if (g_atomic_int_get (&p->qs->dead))
     {
       g_idle_add (bt_tile_probe_idle, p);
       return NULL;
     }
   p->controller = bt_get_controller ();
-  if (p->controller != NULL && !p->qs->dead)
+  if (p->controller != NULL && !g_atomic_int_get (&p->qs->dead))
     {
       p->powered = bt_powered (p->controller);
-      if (p->powered && !p->qs->dead)
+      if (p->powered && !g_atomic_int_get (&p->qs->dead))
         {
           GList *devs = list_bt_devices ();
           GList *l;
@@ -1134,7 +1144,18 @@ bt_refresh_tile_async (QuickSettings *qs)
   p = g_new0 (BtTileProbe, 1);
   p->qs = qs;
   qs_ref (qs);
-  g_thread_unref (g_thread_new ("qs-bt-tile", bt_tile_probe_thread, p));
+  {
+    GThread *t = g_thread_try_new ("qs-bt-tile", bt_tile_probe_thread, p, NULL);
+
+    if (t == NULL)
+      {
+        qs->bt_tile_probe = FALSE;
+        qs_unref (qs);
+        g_free (p);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 /* Builds the Bluetooth sub-page; back_out is left unwired for the facade. */

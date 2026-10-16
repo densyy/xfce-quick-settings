@@ -246,7 +246,7 @@ power_show_value (QuickSettings *qs,
 static void
 power_maybe_start_timer (QuickSettings *qs)
 {
-  if (!qs->dead && gtk_widget_get_sensitive (qs->bat_box)
+  if (!g_atomic_int_get (&qs->dead) && gtk_widget_get_sensitive (qs->bat_box)
       && qs->power_timer == 0)
     qs->power_timer = g_timeout_add_seconds (POWER_INTERVAL_S,
                                              power_tick, qs);
@@ -264,7 +264,7 @@ power_upower_detail_done (const gchar *output,
   gchar         *time = NULL;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -297,7 +297,7 @@ power_upower_list_done (const gchar *output,
   gchar         *path;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -377,7 +377,7 @@ power_tick (gpointer data)
 {
   QuickSettings *qs = data;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs->power_timer = 0;
       return G_SOURCE_REMOVE;

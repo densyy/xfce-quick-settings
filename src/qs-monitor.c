@@ -200,7 +200,7 @@ display_query_done (const gchar *output,
   GList         *l;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -442,7 +442,7 @@ mon_power_done (const gchar *output,
   QuickSettings *qs = c->qs;
 
   (void) output;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       g_free (c->mon);
       qs_unref (qs);

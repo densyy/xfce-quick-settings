@@ -416,7 +416,7 @@ wifi_load_idle (gpointer data)
   QuickSettings *qs = w->qs;
   GList         *nets;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       g_free (w->list_out);
       g_free (w->radio_out);
@@ -471,7 +471,18 @@ wifi_load_async (QuickSettings *qs,
   w = g_new0 (WifiLoad, 1);
   w->qs = qs;
   w->rescan = rescan;
-  g_thread_unref (g_thread_new ("qs-wifi", wifi_load_thread, w));
+  {
+    GThread *t = g_thread_try_new ("qs-wifi", wifi_load_thread, w, NULL);
+
+    if (t == NULL)
+      {
+        qs->scanning_wifi = FALSE;
+        qs_unref (qs);
+        g_free (w);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 /* Async connect: saved-profile decision + nmcli run in the worker. */
@@ -538,7 +549,7 @@ wifi_connect_idle (gpointer data)
   WifiConnect *c = data;
   gchar       *msg;
 
-  if (c->qs->dead)
+  if (g_atomic_int_get (&c->qs->dead))
     {
       g_free (c->ssid);
       g_free (c->password);
@@ -593,7 +604,19 @@ wifi_connect_async (QuickSettings *qs,
     }
   qs_ref (qs);
   gtk_label_set_text (GTK_LABEL (qs->wifi_status), "Connecting…");
-  g_thread_unref (g_thread_new ("qs-wifi-connect", wifi_connect_thread, c));
+  {
+    GThread *t = g_thread_try_new ("qs-wifi-connect", wifi_connect_thread, c, NULL);
+
+    if (t == NULL)
+      {
+        qs_unref (qs);
+        g_free (c->ssid);
+        g_free (c->password);
+        g_free (c);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 static void
@@ -648,7 +671,7 @@ wifi_reload_timeout (gpointer data)
 {
   QuickSettings *qs = data;
 
-  if (!qs->dead)
+  if (!g_atomic_int_get (&qs->dead))
     wifi_load_async (qs, FALSE);
   qs_unref (qs);
   return G_SOURCE_REMOVE;
@@ -731,7 +754,7 @@ wifi_tile_probe_idle (gpointer data)
 
   /* Stale (newer probe issued) or torn-down: drop. A full page load
    * owns the tile while it runs (updates it on done). */
-  if (!qs->dead && p->seq == qs->cache_seq && !qs->scanning_wifi)
+  if (!g_atomic_int_get (&qs->dead) && p->seq == qs->cache_seq && !qs->scanning_wifi)
     {
       qs->wifi_on = p->on;
       set_tile_active (qs->wifi_tile, p->on);
@@ -754,7 +777,7 @@ wifi_tile_probe_thread (gpointer data)
 {
   WifiTileProbe *p = data;
 
-  if (!p->qs->dead)
+  if (!g_atomic_int_get (&p->qs->dead))
     {
       p->avail = command_exists ("nmcli");
       p->on = p->avail ? wifi_enabled_sync () : FALSE;
@@ -776,7 +799,17 @@ wifi_refresh_tile_async (QuickSettings *qs)
   p = g_new0 (WifiTileProbe, 1);
   p->qs = qs;
   p->seq = qs->cache_seq;
-  g_thread_unref (g_thread_new ("qs-wifi-tile", wifi_tile_probe_thread, p));
+  {
+    GThread *t = g_thread_try_new ("qs-wifi-tile", wifi_tile_probe_thread, p, NULL);
+
+    if (t == NULL)
+      {
+        qs_unref (qs);
+        g_free (p);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 /* Builds the Wi-Fi sub-page; back_out is left unwired for the facade. */

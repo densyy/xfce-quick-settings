@@ -23,7 +23,7 @@ audio_volume_done (const gchar *output,
   const gchar   *p;
 
   (void) errout;
-  if (!qs->dead && ok && output != NULL)
+  if (!g_atomic_int_get (&qs->dead) && ok && output != NULL)
     {
       if (req->backend == AUDIO_PACTL)
         value = parse_first_percent (output);
@@ -36,7 +36,7 @@ audio_volume_done (const gchar *output,
       else if (req->use_amixer)
         value = parse_first_percent (output);
     }
-  if (!qs->dead)
+  if (!g_atomic_int_get (&qs->dead))
     {
       GtkWidget *target_scale = req->is_source ? qs->audio_in_vol_scale : qs->audio_out_vol_scale;
        GtkWidget *target_icon = req->is_source ? qs->audio_in_vol_icon : qs->audio_out_vol_icon;
@@ -272,7 +272,7 @@ audio_devices_idle (gpointer data)
   QuickSettings *qs = load->qs;
   GList         *l;
 
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       g_list_free_full (load->sinks, audio_dev_free);
       g_list_free_full (load->sources, audio_dev_free);
@@ -355,7 +355,17 @@ audio_refresh_devices (QuickSettings *qs)
   if (qs->popup != NULL)
     g_object_set_data (G_OBJECT (qs->popup), AUDIO_DATA_LOADING,
                        GUINT_TO_POINTER (1));
-  g_thread_unref (g_thread_new ("qs-audio", audio_devices_thread, load));
+  {
+    GThread *t = g_thread_try_new ("qs-audio", audio_devices_thread, load, NULL);
+
+    if (t == NULL)
+      {
+        qs_unref (qs);
+        g_free (load);
+      }
+    else
+      g_thread_unref (t);
+  }
 }
 
 static void

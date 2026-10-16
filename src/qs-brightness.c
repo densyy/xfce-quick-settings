@@ -348,7 +348,7 @@ static void
 bright_apply_to_slider (QuickSettings *qs,
                         gint           value)
 {
-  if (qs->dead || qs->bright_scale == NULL)
+  if (g_atomic_int_get (&qs->dead) || qs->bright_scale == NULL)
     return;
   qs->updating = TRUE;
   /* Se o sistema está abaixo do piso (ex: zerado por fora), mostra o
@@ -363,7 +363,7 @@ bright_apply_to_slider (QuickSettings *qs,
 static void
 bright_disable_slider (QuickSettings *qs)
 {
-  if (qs->dead || qs->bright_scale == NULL)
+  if (g_atomic_int_get (&qs->dead) || qs->bright_scale == NULL)
     return;
   qs->updating = TRUE;
   gtk_widget_set_sensitive (qs->bright_scale, FALSE);
@@ -396,7 +396,7 @@ bright_on_ctl2 (const gchar *output,
   gint value = -1;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -443,7 +443,7 @@ bright_on_ctl (const gchar *output,
   gint value = -1;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -470,7 +470,7 @@ bright_on_xback (const gchar *output,
   gint value = -1;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -508,7 +508,7 @@ bright_on_xrandr (const gchar *output,
   gint value = -1;
 
   (void) errout;
-  if (qs->dead)
+  if (g_atomic_int_get (&qs->dead))
     {
       qs_unref (qs);
       return;
@@ -554,7 +554,7 @@ bright_set_output_done (const gchar *output,
   QuickSettings *qs = b->qs;
 
   (void) errout;
-  if (!qs->dead && ok && output != NULL)
+  if (!g_atomic_int_get (&qs->dead) && ok && output != NULL)
     {
       gchar *name = bright_extract_output (output);
 
@@ -787,7 +787,7 @@ bright_debounce_fire (gpointer user_data)
   bright_timer_id = 0;
   v = bright_pending_val;
   bright_pending_val = -1;
-  if (!qs->dead && v >= 0)
+  if (!g_atomic_int_get (&qs->dead) && v >= 0)
     bright_set_for_qs (qs, v);
   qs_unref (qs);
   return G_SOURCE_REMOVE;
@@ -820,7 +820,7 @@ display_refresh_brightness (QuickSettings *qs)
   BrightBackend be;
   gint value;
 
-  if (qs->dead || qs->bright_scale == NULL)
+  if (g_atomic_int_get (&qs->dead) || qs->bright_scale == NULL)
     return;
   be = bright_probe_backend ();
 
