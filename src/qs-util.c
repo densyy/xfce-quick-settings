@@ -1,5 +1,7 @@
 #include "qs-util.h"
 
+#include <gio/gio.h>
+
 gboolean
 command_exists (const gchar *name)
 {
@@ -41,44 +43,145 @@ spawn_command (const gchar *cmdline)
     }
 }
 
-/* Async command: runs in a worker thread, done() fires in the main loop. */
+/* Async command: fully async GSubprocess in the main context, with a
+ * watchdog timeout so a stuck binary (pactl/nmcli) can never hang us. */
+
+#define QS_ASYNC_TIMEOUT_SECONDS 5
 
 typedef struct
 {
-  gchar    *cmdline;
-  QsCmdDone done;
-  gpointer  user_data;
-  gchar    *output;
-  gchar    *errout;
-  gboolean  ok;
+  gchar        *cmdline;
+  QsCmdDone     done;
+  gpointer      user_data;
+  gchar        *output;
+  gchar        *errout;
+  gboolean      ok;
+  gboolean      finished;
+  GSubprocess  *proc;
+  GCancellable *cancellable;
+  guint         timeout_id;
 } QsAsync;
 
-static gboolean
-qs_async_idle (gpointer data)
+static void
+qs_async_finish (QsAsync *a)
 {
-  QsAsync *a = data;
-
+  if (a->finished)
+    return;
+  a->finished = TRUE;
+  if (a->timeout_id != 0)
+    {
+      g_source_remove (a->timeout_id);
+      a->timeout_id = 0;
+    }
   if (a->done != NULL)
     a->done (a->output, a->errout, a->ok, a->user_data);
+  g_clear_object (&a->proc);
+  g_clear_object (&a->cancellable);
   g_free (a->cmdline);
   g_free (a->output);
   g_free (a->errout);
   g_free (a);
+}
+
+static void
+qs_async_comm_done (GObject      *source,
+                    GAsyncResult *result,
+                    gpointer      user_data)
+{
+  QsAsync *a = user_data;
+  GError  *error = NULL;
+  GBytes  *out = NULL;
+  GBytes  *err = NULL;
+
+  if (g_subprocess_communicate_finish (G_SUBPROCESS (source), result,
+                                       &out, &err, &error))
+    {
+      if (out != NULL)
+        {
+          gsize len;
+          const gchar *p = g_bytes_get_data (out, &len);
+
+          a->output = (p != NULL && len > 0) ? g_strndup (p, len)
+                                             : g_strdup ("");
+        }
+      if (err != NULL)
+        {
+          gsize len;
+          const gchar *p = g_bytes_get_data (err, &len);
+
+          a->errout = (p != NULL && len > 0) ? g_strndup (p, len)
+                                             : g_strdup ("");
+        }
+      a->ok = TRUE;
+    }
+  else
+    {
+      /* timeout/cancelamento ou falha de I/O: não pode travar.
+       * force_exit é seguro mesmo se o processo já tiver saído e evita a
+       * assertion de g_subprocess_get_if_exited em processo ainda vivo. */
+      if (a->proc != NULL)
+        g_subprocess_force_exit (a->proc);
+      a->ok = FALSE;
+      g_clear_error (&error);
+    }
+  if (out != NULL)
+    g_bytes_unref (out);
+  if (err != NULL)
+    g_bytes_unref (err);
+  qs_async_finish (a);
+}
+
+static gboolean
+qs_async_timeout (gpointer user_data)
+{
+  QsAsync *a = user_data;
+
+  a->timeout_id = 0;
+  if (!a->finished && a->cancellable != NULL)
+    g_cancellable_cancel (a->cancellable);
   return G_SOURCE_REMOVE;
 }
 
-static gpointer
-qs_async_thread (gpointer data)
+static gboolean
+qs_async_launch (gpointer user_data)
 {
-  QsAsync *a = data;
-  GError  *error = NULL;
+  QsAsync *a = user_data;
+  GSubprocessLauncher *launcher;
+  GError *error = NULL;
+  gchar **argv = NULL;
 
-  a->ok = g_spawn_command_line_sync (a->cmdline, &a->output, &a->errout,
-                                     NULL, &error);
-  if (error != NULL)
-    g_clear_error (&error);
-  g_idle_add (qs_async_idle, a);
-  return NULL;
+  if (!g_shell_parse_argv (a->cmdline, NULL, &argv, &error))
+    {
+      g_clear_error (&error);
+      a->ok = FALSE;
+      qs_async_finish (a);
+      return G_SOURCE_REMOVE;
+    }
+
+  launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE
+                                        | G_SUBPROCESS_FLAGS_STDERR_PIPE);
+  a->proc = g_subprocess_launcher_spawnv (launcher,
+                                          (const gchar * const *) argv,
+                                          &error);
+  g_object_unref (launcher);
+  g_strfreev (argv);
+
+  if (a->proc == NULL)
+    {
+      g_clear_error (&error);
+      a->ok = FALSE;
+      qs_async_finish (a);
+      return G_SOURCE_REMOVE;
+    }
+
+  a->cancellable = g_cancellable_new ();
+  a->timeout_id = g_timeout_add_seconds (QS_ASYNC_TIMEOUT_SECONDS,
+                                         qs_async_timeout, a);
+  /* GLib 2.88: g_subprocess_communicate_async ganhou o parâmetro
+   * stdin_buf; NULL = sem stdin, equivalente à assinatura antiga de 4 args. */
+  g_subprocess_communicate_async (a->proc, NULL, a->cancellable,
+                                  qs_async_comm_done, a);
+  return G_SOURCE_REMOVE;
 }
 
 void
@@ -87,7 +190,6 @@ run_command_async (const gchar *cmdline,
                    gpointer     user_data)
 {
   QsAsync *a;
-  GThread *thread;
 
   if (cmdline == NULL || done == NULL)
     return;
@@ -96,14 +198,12 @@ run_command_async (const gchar *cmdline,
   a->cmdline = g_strdup (cmdline);
   a->done = done;
   a->user_data = user_data;
-  thread = g_thread_new ("qs-cmd", qs_async_thread, a);
-  if (thread == NULL)
-    {
-      g_free (a->cmdline);
-      g_free (a);
-      return;
-    }
-  g_thread_unref (thread);
+  /* Agenda o launch no main context global como fonte (g_timeout_add é
+   * thread-safe). Garante que spawn, timeout e done rodem SEMPRE dentro de
+   * uma iteração do loop — nunca de forma síncrona ao chamador. Isso evita
+   * que done()/g_main_loop_quit() dispare antes de g_main_loop_run() quando
+   * a falha é imediata (ex.: binário inexistente). Sem threads. */
+  g_timeout_add (0, qs_async_launch, a);
 }
 
 /* Split an nmcli terse line on unescaped ':' (handles \: and \\). */
