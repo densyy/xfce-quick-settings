@@ -27,6 +27,8 @@ Comment=Quick access to Wi-Fi, Bluetooth, brightness, volume and power settings 
 Icon=preferences-system-symbolic
 X-XFCE-Module=quicksettings
 X-XFCE-API=2.0
+X-XFCE-Internal=false
+X-XFCE-Unique=true
 EOF
 #
 # INSTALL FILES
