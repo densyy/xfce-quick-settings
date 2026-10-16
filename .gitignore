@@ -12,3 +12,8 @@ tests/test-power
 tests/test-sysmon-data
 tests/test-util
 tests/test-wifi
+tests/test-fuzz
+tests/test-wifi-security
+tests/test-perf
+tests/test-ui
+tests/test-e2e

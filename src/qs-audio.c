@@ -334,7 +334,7 @@ audio_refresh_devices (QuickSettings *qs)
   AudioBackend backend = audio_get_backend_cached ();
   AudioLoad   *load;
 
-  qs->audio_backend = backend;
+  qs->audio_backend = (gint) backend;
   if (backend == AUDIO_NONE)
     {
       qs->updating = TRUE;
@@ -515,18 +515,18 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   audio_page = make_sub_page ("Audio devices", &audio_back);
   out_grid = make_group (audio_page, "Output");
   make_slider_row (out_grid, 0, 150, "audio-volume-high-symbolic", "Output volume",
- & qs->audio_out_vol_icon, & qs->audio_out_vol_scale); 
-  gtk_scale_add_mark (GTK_SCALE (qs->audio_out_vol_scale), 100.0, GTK_POS_BOTTOM, "100%"); 
+ & qs->audio_out_vol_icon, & qs->audio_out_vol_scale);
+  gtk_scale_add_mark (GTK_SCALE (qs->audio_out_vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
   qs->sink_combo = make_device_row (out_grid, 1, "audio-speakers-symbolic",
-                                  "Audio output device"); 
+                                  "Audio output device");
   ui_add_separator (audio_page);
   in_grid = make_group (audio_page, "Input");
   make_slider_row (in_grid, 0, 150, "audio-input-microphone-symbolic", "Input volume",
- & qs->audio_in_vol_icon, & qs->audio_in_vol_scale); 
-  gtk_scale_add_mark (GTK_SCALE (qs->audio_in_vol_scale), 100.0, GTK_POS_BOTTOM, "100%"); 
+ & qs->audio_in_vol_icon, & qs->audio_in_vol_scale);
+  gtk_scale_add_mark (GTK_SCALE (qs->audio_in_vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
   qs->source_combo = make_device_row (in_grid, 1,
                                       "audio-input-microphone-symbolic",
-                                      "Audio input device"); 
+                                      "Audio input device");
   gtk_stack_add_named (GTK_STACK (stack), audio_page, "audio");
   g_signal_connect (audio_back, "clicked",
                     G_CALLBACK (on_audio_back_clicked), qs);
@@ -552,7 +552,7 @@ audio_refresh_input_volume (QuickSettings *qs)
   AudioVolReq *req;
   const gchar *cmd;
 
-  qs->audio_backend = backend;
+  qs->audio_backend = (gint) backend;
   if (backend == AUDIO_PACTL)
     cmd = "pactl get-source-volume @DEFAULT_SOURCE@";
   else if (backend == AUDIO_WPCTL)
@@ -586,7 +586,7 @@ audio_refresh_volume (QuickSettings *qs)
   AudioVolReq *req;
   const gchar *cmd;
 
-  qs->audio_backend = backend;
+  qs->audio_backend = (gint) backend;
   if (backend == AUDIO_PACTL)
     cmd = "pactl get-sink-volume @DEFAULT_SINK@";
   else if (backend == AUDIO_WPCTL)

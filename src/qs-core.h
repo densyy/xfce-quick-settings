@@ -16,12 +16,12 @@ typedef struct
   GtkWidget       *popup;
   GtkWidget       *vol_icon;
   GtkWidget       *vol_scale;
-  GtkWidget       *audio_out_vol_icon; 
-  GtkWidget       *audio_out_vol_scale; 
-  GtkWidget       *audio_in_vol_icon; 
-  GtkWidget       *audio_in_vol_scale; 
-  GtkWidget       *bright_scale; 
-  GtkWidget       *sink_combo; 
+  GtkWidget       *audio_out_vol_icon;
+  GtkWidget       *audio_out_vol_scale;
+  GtkWidget       *audio_in_vol_icon;
+  GtkWidget       *audio_in_vol_scale;
+  GtkWidget       *bright_scale;
+  GtkWidget       *sink_combo;
   GtkWidget       *source_combo;
   gint             audio_backend; /* AudioBackend, see qs-audio.h */
   GtkWidget       *stack;
