@@ -38,9 +38,11 @@ on_power_action_clicked (GtkButton *button,
         spawn_command ("xfce4-session-logout --logout");
       else
         {
-          gchar *cmd = g_strdup_printf ("loginctl terminate-user %s",
-                                        g_get_user_name ());
+          gchar *user = g_shell_quote (g_get_user_name ());
+          gchar *cmd = g_strdup_printf ("loginctl terminate-user %s", user);
+
           spawn_command (cmd);
+          g_free (user);
           g_free (cmd);
         }
     }

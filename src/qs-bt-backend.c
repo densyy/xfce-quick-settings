@@ -51,7 +51,12 @@ bt_powered (const gchar *controller)
 
   if (controller == NULL)
     return FALSE;
-  cmd = g_strdup_printf ("bluetoothctl --timeout 1 show %s", controller);
+  {
+    gchar *controller_q = g_shell_quote (controller);
+
+    cmd = g_strdup_printf ("bluetoothctl --timeout 1 show %s", controller_q);
+    g_free (controller_q);
+  }
   output = run_command (cmd);
   if (output != NULL)
     {
@@ -76,9 +81,12 @@ bt_set_powered (gboolean on)
 void
 bt_fill_flags (BtDevice *dev)
 {
-  gchar *cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s",
-                                dev->mac);
-  gchar *output = run_command (cmd);
+  gchar *mac_q = g_shell_quote (dev->mac);
+  gchar *cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
+  gchar *output;
+
+  g_free (mac_q);
+  output = run_command (cmd);
 
   if (output != NULL)
     {
@@ -156,7 +164,12 @@ bt_apply_filtered_devices (GList    **devs,
   gchar **lines;
   gint    i;
 
-  cmd = g_strdup_printf ("bluetoothctl --timeout 1 devices %s", filter);
+  {
+    gchar *filter_q = g_shell_quote (filter);
+
+    cmd = g_strdup_printf ("bluetoothctl --timeout 1 devices %s", filter_q);
+    g_free (filter_q);
+  }
   output = run_command (cmd);
   g_free (cmd);
   if (output == NULL)

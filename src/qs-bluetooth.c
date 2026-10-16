@@ -724,7 +724,12 @@ bt_verify_timeout (gpointer data)
       bt_link_finish (l);
       return G_SOURCE_REMOVE;
     }
-  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", l->mac);
+  {
+    gchar *mac_q = g_shell_quote (l->mac);
+
+    cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
+    g_free (mac_q);
+  }
   run_command_async (cmd, bt_link_verify_done, l);
   g_free (cmd);
   return G_SOURCE_REMOVE;
@@ -851,15 +856,25 @@ bt_link_run_next (BtLink *l)
       /* All verbs done: only trust `info` saying Connected yes/no. */
       gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
       l->verify_tries = BT_VERIFY_MAX_TRIES;
-      cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", l->mac);
+      {
+        gchar *mac_q = g_shell_quote (l->mac);
+
+        cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
+        g_free (mac_q);
+      }
       run_command_async (cmd, bt_link_verify_done, l);
       g_free (cmd);
       return;
     }
   gtk_label_set_text (GTK_LABEL (l->qs->bt_status),
                       bt_doing_label (l->verbs[l->idx]));
-  cmd = g_strdup_printf ("bluetoothctl --timeout 10 %s %s",
-                         l->verbs[l->idx], l->mac);
+  {
+    gchar *mac_q = g_shell_quote (l->mac);
+
+    cmd = g_strdup_printf ("bluetoothctl --timeout 10 %s %s",
+                           l->verbs[l->idx], mac_q);
+    g_free (mac_q);
+  }
   run_command_async (cmd, bt_link_done, l);
   g_free (cmd);
 }
@@ -948,7 +963,12 @@ bt_toggle_device (QuickSettings *qs,
   bt_link_track (l);
   qs_ref (qs);
   gtk_label_set_text (GTK_LABEL (qs->bt_status), "Reading device…");
-  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", l->mac);
+  {
+    gchar *mac_q = g_shell_quote (l->mac);
+
+    cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
+    g_free (mac_q);
+  }
   run_command_async (cmd, bt_toggle_info_done, l);
   g_free (cmd);
 }
