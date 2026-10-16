@@ -78,7 +78,12 @@ test_save_wifi_bt (void)
   qs_cache_save (qs);
   g_assert_true (g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL));
   g_assert_true (g_key_file_get_boolean (kf, "wifi", "on", NULL));
-  g_assert_cmpstr (g_key_file_get_string (kf, "wifi", "ssid", NULL), ==, "Casa");
+  {
+    gchar *ssid = g_key_file_get_string (kf, "wifi", "ssid", NULL);
+
+    g_assert_cmpstr (ssid, ==, "Casa");
+    g_free (ssid);
+  }
   g_assert_true (g_key_file_get_boolean (kf, "bluetooth", "powered", NULL));
   g_key_file_free (kf);
   g_free (path);
