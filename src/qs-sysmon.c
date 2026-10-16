@@ -4,6 +4,14 @@
 
 #define SYSMON_INTERVAL_S 2
 
+/* Last values pushed to the RAM/CPU widgets: skip set_text/set_bar when
+ * the rendered value is unchanged (avoids needless redraw every tick). */
+static gchar  *sysmon_last_ram_text = NULL;
+static guint64 sysmon_last_ram_used = 0;
+static guint64 sysmon_last_ram_total = 0;
+static gdouble sysmon_last_cpu_frac = -1.0;
+static gchar  *sysmon_last_cpu_text = NULL;
+
 /* VIEW (cards/refresh/tick): abaixo só GTK.
  * DATA (acima) nunca toca em widget; VIEW nunca faz parse/stat direto
  * (usa read_* e o mounts_key para pular statvfs). */
@@ -205,17 +213,39 @@ sysmon_refresh (QuickSettings *qs)
 
       text = g_strdup_printf ("%.2f / %.2f GB",
                               (gdouble) used / 1073741824.0, (gdouble) total / 1073741824.0);
-      gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
-      g_free (text);
-      sysmon_set_bar (qs->sysmon_ram_bar, qs->sysmon_ram_pct, frac);
+      if (g_strcmp0 (text, sysmon_last_ram_text) != 0)
+        {
+          gtk_label_set_text (GTK_LABEL (qs->sysmon_ram_value), text);
+          g_free (sysmon_last_ram_text);
+          sysmon_last_ram_text = text;
+        }
+      else
+        g_free (text);
+      if (used != sysmon_last_ram_used || total != sysmon_last_ram_total)
+        {
+          sysmon_set_bar (qs->sysmon_ram_bar, qs->sysmon_ram_pct, frac);
+          sysmon_last_ram_used = used;
+          sysmon_last_ram_total = total;
+        }
     }
   cpu = sysmon_read_cpu (qs);
   if (cpu >= 0.0)
     {
+      const gchar *topo = sysmon_cpu_topology_text ();
+      gdouble      frac = cpu / 100.0;
+
       /* Header value shows static topology; the side label keeps live %. */
-      gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value),
-                          sysmon_cpu_topology_text ());
-      sysmon_set_bar (qs->sysmon_cpu_bar, qs->sysmon_cpu_pct, cpu / 100.0);
+      if (g_strcmp0 (topo, sysmon_last_cpu_text) != 0)
+        {
+          gtk_label_set_text (GTK_LABEL (qs->sysmon_cpu_value), topo);
+          g_free (sysmon_last_cpu_text);
+          sysmon_last_cpu_text = g_strdup (topo);
+        }
+      if (frac != sysmon_last_cpu_frac)
+        {
+          sysmon_set_bar (qs->sysmon_cpu_bar, qs->sysmon_cpu_pct, frac);
+          sysmon_last_cpu_frac = frac;
+        }
     }
 
   /* Disks: statvfs (bloqueante, pula rede) só quando /proc/mounts mudou
@@ -343,6 +373,11 @@ sysmon_stop (QuickSettings *qs)
       g_source_remove (qs->sysmon_timer);
       qs->sysmon_timer = 0;
     }
+  g_clear_pointer (&sysmon_last_ram_text, g_free);
+  g_clear_pointer (&sysmon_last_cpu_text, g_free);
+  sysmon_last_ram_used = 0;
+  sysmon_last_ram_total = 0;
+  sysmon_last_cpu_frac = -1.0;
 }
 
 static void

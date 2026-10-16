@@ -26,11 +26,15 @@ static off_t notify_cached_size = 0;
 static gboolean notify_cache_ready = FALSE;
 static gint notify_list_count = -1;
 static gint64 notify_list_max = -1;
+static gint notify_last_count = G_MININT;
 
 static void
 notify_set_tile_count (QuickSettings *qs,
                        gint           count)
 {
+  if (count == notify_last_count)
+    return;
+  notify_last_count = count;
   if (count <= 0)
     gtk_label_set_text (GTK_LABEL (qs->notify_sub), "Empty");
   else
