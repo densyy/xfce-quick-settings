@@ -139,9 +139,10 @@ get_battery_sysfs (gint   *percent,
 
               if (g_file_get_contents (cap_path, &cap, NULL, NULL))
                 {
-                  *percent = atoi (cap);
+                  *percent = -1;
+                  if (qs_parse_int_checked (cap, percent))
+                    found = TRUE;
                   g_free (cap);
-                  found = (*percent >= 0);
                 }
               if (found
                   && g_file_get_contents (st_path, state_out, NULL, NULL))

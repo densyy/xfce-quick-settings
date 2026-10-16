@@ -75,7 +75,8 @@ parse_wifi_list (const gchar *output)
           g_strfreev (fields);
           continue;
         }
-      signal = atoi (fields[2]);
+      if (!qs_parse_int_checked (fields[2], &signal))
+        signal = 0;
       secured = !(g_strcmp0 (fields[3], "--") == 0 || *fields[3] == '\0');
       active = (g_strcmp0 (fields[0], "*") == 0);
       existing = g_hash_table_lookup (seen, fields[1]);

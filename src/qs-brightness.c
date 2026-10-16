@@ -48,43 +48,6 @@ static guint bright_timer_id = 0;
 static gint bright_pending_val = -1;
 
 static gboolean
-qs_parse_int_checked (const gchar *s,
-                      gint        *out)
-{
-  const gchar *p;
-  gchar *end = NULL;
-  guint64 v;
-
-  if (s == NULL || out == NULL)
-    return FALSE;
-  p = s;
-  while (g_ascii_isspace (*p))
-    p++;
-  if (*p == '\0')
-    return FALSE;
-  if (*p == '-')
-    return FALSE;
-  if (*p == '+')
-    {
-      p++;
-      if (*p == '\0')
-        return FALSE;
-    }
-  errno = 0;
-  v = g_ascii_strtoull (p, &end, 10);
-  if (errno != 0 || end == p)
-    return FALSE;
-  while (*end != '\0' && g_ascii_isspace (*end))
-    end++;
-  if (*end != '\0')
-    return FALSE;
-  if (v > (guint64) G_MAXINT)
-    return FALSE;
-  *out = (gint) v;
-  return TRUE;
-}
-
-static gboolean
 qs_parse_double_checked (const gchar *s,
                          gdouble     *out)
 {

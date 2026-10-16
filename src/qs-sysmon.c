@@ -1,6 +1,7 @@
 #include "qs-sysmon.h"
 #include "qs-sysmon-data.h"
 #include "qs-ui.h"
+#include "qs-util.h"
 
 #define SYSMON_INTERVAL_S 2
 
@@ -147,14 +148,24 @@ sysmon_cpu_topology_text (void)
                 const gchar *colon = strchr (lines[i], ':');
 
                 if (colon != NULL)
-                  phys = atoi (colon + 1);
+                  {
+                    gint v;
+
+                    if (qs_parse_int_checked (colon + 1, &v))
+                      phys = v;
+                  }
               }
             else if (g_str_has_prefix (lines[i], "core id"))
               {
                 const gchar *colon = strchr (lines[i], ':');
 
                 if (colon != NULL)
-                  core = atoi (colon + 1);
+                  {
+                    gint v;
+
+                    if (qs_parse_int_checked (colon + 1, &v))
+                      core = v;
+                  }
               }
             else if (lines[i][0] == '\0')
               {

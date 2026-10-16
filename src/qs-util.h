@@ -19,6 +19,9 @@ void run_command_async (const gchar *cmdline,
 /* Split an nmcli terse line on unescaped ':' (handles \: and \\). */
 gchar **split_terse_line (const gchar *line,
                           gint         expected_fields);
+/* Parse a decimal integer with full validation (rejects empty/sign/trailing
+ * garbage/overflow); FALSE on invalid input. */
+gboolean qs_parse_int_checked (const gchar *s, gint *out);
 /* First "NN%" found in text, or -1. */
 gint parse_first_percent (const gchar *text);
 

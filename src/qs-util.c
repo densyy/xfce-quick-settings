@@ -242,6 +242,46 @@ split_terse_line (const gchar *line,
   return (gchar **) g_ptr_array_free (fields, FALSE);
 }
 
+/* Parse a decimal integer with full validation: rejects NULL/empty, signs,
+ * trailing garbage and overflow past G_MAXINT. Returns FALSE on any invalid
+ * input, TRUE (writing *out) otherwise. */
+gboolean
+qs_parse_int_checked (const gchar *s,
+                      gint        *out)
+{
+  const gchar *p;
+  gchar *end = NULL;
+  guint64 v;
+
+  if (s == NULL || out == NULL)
+    return FALSE;
+  p = s;
+  while (g_ascii_isspace (*p))
+    p++;
+  if (*p == '\0')
+    return FALSE;
+  if (*p == '-')
+    return FALSE;
+  if (*p == '+')
+    {
+      p++;
+      if (*p == '\0')
+        return FALSE;
+    }
+  errno = 0;
+  v = g_ascii_strtoull (p, &end, 10);
+  if (errno != 0 || end == p)
+    return FALSE;
+  while (*end != '\0' && g_ascii_isspace (*end))
+    end++;
+  if (*end != '\0')
+    return FALSE;
+  if (v > (guint64) G_MAXINT)
+    return FALSE;
+  *out = (gint) v;
+  return TRUE;
+}
+
 /* First "NN%" found in text, or -1. */
 gint
 parse_first_percent (const gchar *text)
@@ -262,7 +302,8 @@ parse_first_percent (const gchar *text)
   if (start == p)
     return -1;
   num = g_strndup (start, (gsize) (p - start));
-  value = atoi (num);
+  if (!qs_parse_int_checked (num, &value))
+    value = -1;
   g_free (num);
   return value;
 }
