@@ -22,6 +22,7 @@ run_command (const gchar *cmdline)
 
   if (!g_spawn_command_line_sync (cmdline, &output, NULL, NULL, &error))
     {
+      g_warning ("run_command failed: %s: %s", cmdline, error->message);
       g_clear_error (&error);
       return NULL;
     }
@@ -34,7 +35,10 @@ spawn_command (const gchar *cmdline)
   GError *error = NULL;
 
   if (!g_spawn_command_line_async (cmdline, &error))
-    g_clear_error (&error);
+    {
+      g_warning ("spawn_command failed: %s: %s", cmdline, error->message);
+      g_clear_error (&error);
+    }
 }
 
 /* Async command: runs in a worker thread, done() fires in the main loop. */
