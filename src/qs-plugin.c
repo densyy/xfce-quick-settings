@@ -214,9 +214,14 @@ on_size_changed (XfcePanelPlugin *plugin,
 {
   QuickSettings *qs = user_data;
   gint           icon_size = xfce_panel_plugin_get_icon_size (plugin);
+  gint           nrows = (gint) xfce_panel_plugin_get_nrows (plugin);
+  gint           border = (size < 26) ? 1 : 2;
 
+  if (nrows > 1)
+    size /= nrows;
   gtk_image_set_pixel_size (GTK_IMAGE (qs->button_image), MAX (16, icon_size));
   gtk_widget_set_size_request (qs->button, size, size);
+  gtk_container_set_border_width (GTK_CONTAINER (plugin), (guint) border);
   return TRUE;
 }
 
@@ -257,6 +262,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   gtk_widget_set_tooltip_text (qs->button, "Quick Settings");
   gtk_container_add (GTK_CONTAINER (qs->button), qs->button_image);
   gtk_container_add (GTK_CONTAINER (plugin), qs->button);
+  xfce_panel_plugin_add_action_widget (plugin, qs->button);
 
   qs->popup = gtk_window_new (GTK_WINDOW_TOPLEVEL);
   gtk_window_set_decorated (GTK_WINDOW (qs->popup), FALSE);
