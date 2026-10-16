@@ -577,6 +577,39 @@ bright_set_output_done (const gchar *output,
   g_free (b);
 }
 
+/* Warmup do cache de output (miss sem qs): resolve via async, sem
+ * bloquear o main loop. */
+static void
+bright_warmup_done (const gchar *output,
+                    const gchar *errout,
+                    gboolean     ok,
+                    gpointer      user_data)
+{
+  gint vout = GPOINTER_TO_INT (user_data);
+
+  (void) errout;
+  if (!ok || output == NULL)
+    return;
+  {
+    gchar *name = bright_extract_output (output);
+
+    if (name != NULL)
+      {
+        gchar *qname;
+        gchar *cmd;
+
+        g_free (bright_xout);
+        bright_xout = name;
+        qname = g_shell_quote (bright_xout);
+        cmd = g_strdup_printf ("xrandr --output %s --brightness %.2f",
+                               qname, vout / 100.0);
+        g_free (qname);
+        spawn_command (cmd);
+        g_free (cmd);
+      }
+  }
+}
+
 static void
 set_brightness_percent (gint value)
 {
@@ -687,33 +720,11 @@ set_brightness_percent (gint value)
         }
       else
         {
-          /* Miss de cache sem qs: uma query síncrona única de warmup
-           * (só no primeiro tick em desktop sem backlight; os seguintes
-           * usam cache). --query é mais leve que --verbose. */
-          {
-            gchar *dump = NULL;
-
-            dump = run_command ("xrandr --query");
-            if (dump != NULL)
-              {
-                gchar *name = bright_extract_output (dump);
-
-                if (name != NULL)
-                  {
-                    gchar *qname = g_shell_quote (name);
-                    gchar *cmd = g_strdup_printf ("xrandr --output %s "
-                                                  "--brightness %.2f",
-                                                  qname, vout / 100.0);
-
-                    g_free (qname);
-                    spawn_command (cmd);
-                    g_free (cmd);
-                    g_free (bright_xout);
-                    bright_xout = name;
-                  }
-                g_free (dump);
-              }
-          }
+          /* Miss de cache sem qs: resolve via async, sem bloquear o
+           * main loop. */
+          run_command_async ("xrandr --query",
+                             bright_warmup_done,
+                             GINT_TO_POINTER (vout));
         }
     }
 }
