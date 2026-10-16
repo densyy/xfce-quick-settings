@@ -15,6 +15,7 @@
  * - atoi substituído por g_ascii_strtoull/strtod com checagem.
  */
 #include "qs-display.h"
+#include "qs-brightness.h"
 #include "qs-ui.h"
 #include "qs-util.h"
 
@@ -282,7 +283,7 @@ bright_read_sysfs (void)
 
 /* Primeiro output " connected" de um dump xrandr (para cache do setter).
  * Caller frees. */
-static gchar *
+gchar *
 bright_extract_output (const gchar *dump)
 {
   gchar **lines;
