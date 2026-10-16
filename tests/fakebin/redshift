@@ -1,0 +1,6 @@
+#!/bin/sh
+# redshift falso para testes E2E: loga argv em $QS_FAKE_LOG, sempre sai 0.
+if [ -n "${QS_FAKE_LOG:-}" ]; then
+  printf 'redshift %s\n' "$*" >> "$QS_FAKE_LOG"
+fi
+exit 0

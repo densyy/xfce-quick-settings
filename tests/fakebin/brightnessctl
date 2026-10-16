@@ -1,0 +1,9 @@
+#!/bin/sh
+# brightnessctl falso para testes E2E: loga argv; `g` responde 50.
+if [ -n "${QS_FAKE_LOG:-}" ]; then
+  printf 'brightnessctl %s\n' "$*" >> "$QS_FAKE_LOG"
+fi
+if [ "$1" = "g" ]; then
+  printf '50\n'
+fi
+exit 0
