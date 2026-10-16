@@ -16,7 +16,7 @@ static gboolean power_tick (gpointer data);
 
 /* First "upower -e" line mentioning a battery, or NULL (caller frees).
  * Puro (só parse): usado no callback async, sem spawn. */
-static gchar *
+gchar *
 power_parse_battery_path (const gchar *output)
 {
   gchar **lines;
@@ -40,7 +40,7 @@ power_parse_battery_path (const gchar *output)
 }
 
 /* Parse de "upower -i" (puro, sem spawn). */
-static gboolean
+gboolean
 power_parse_detail (const gchar *output,
                     gint        *percent,
                     gchar      **state_out,
@@ -158,7 +158,7 @@ get_battery_sysfs (gint   *percent,
   return found;
 }
 
-static const gchar *
+const gchar *
 battery_icon_for_level (gint     percent,
                         gboolean charging)
 {

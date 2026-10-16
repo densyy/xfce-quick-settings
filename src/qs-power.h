@@ -12,4 +12,12 @@ void power_start (QuickSettings *qs);
 /* Stops the 30s timer. */
 void power_stop (QuickSettings *qs);
 
+/* Pure helpers exposed for tests (no widget access). */
+gchar       *power_parse_battery_path (const gchar *output);
+gboolean     power_parse_detail (const gchar *output,
+                                 gint        *percent,
+                                 gchar      **state_out,
+                                 gchar      **time_out);
+const gchar *battery_icon_for_level (gint percent, gboolean charging);
+
 #endif /* QS_POWER_H */
