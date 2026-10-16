@@ -238,6 +238,8 @@ quick_settings_free (XfcePanelPlugin *plugin,
   power_stop (qs);
   net_cleanup ();
   qs_fade_cancel (qs);
+  bright_stop ();
+  qs_cache_stop ();
   gtk_widget_destroy (qs->popup);
   qs_unref (qs);
 }

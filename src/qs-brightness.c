@@ -776,6 +776,17 @@ on_brightness_changed (GtkRange *range,
                                    bright_debounce_fire, qs);
 }
 
+void
+bright_stop (void)
+{
+  if (bright_timer_id != 0)
+    {
+      g_source_remove (bright_timer_id);
+      bright_timer_id = 0;
+    }
+  bright_pending_val = -1;
+}
+
 /* Fachada estável (qs-display.h): refresh sem spawn síncrono na UI. */
 void
 display_refresh_brightness (QuickSettings *qs)

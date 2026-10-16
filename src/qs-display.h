@@ -19,6 +19,7 @@ void display_refresh_tile (QuickSettings *qs);
 
 /* --- brightness (qs-brightness.c) --- */
 void on_brightness_changed (GtkRange *range, gpointer user_data);
+void bright_stop (void);
 
 /* --- night light (qs-nightlight.c) --- */
 gboolean night_available (void);

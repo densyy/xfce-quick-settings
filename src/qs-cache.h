@@ -7,4 +7,5 @@
 void qs_cache_load (QuickSettings *qs);        /* main thread; aplica nos widgets */
 void qs_cache_save (QuickSettings *qs);        /* main thread; escrita atômica */
 void qs_cache_schedule_save (QuickSettings *qs); /* debounce 500ms via g_timeout_add */
+void qs_cache_stop (void);                     /* cancela debounce pendente (teardown) */
 #endif

@@ -181,6 +181,7 @@ qs_cache_save (QuickSettings *qs)
 }
 
 static guint pending_id = 0;
+static QuickSettings *pending_qs = NULL;
 
 static gboolean
 save_tick (gpointer data)
@@ -188,6 +189,7 @@ save_tick (gpointer data)
   QuickSettings *qs = data;
 
   pending_id = 0;
+  pending_qs = NULL;
   qs_cache_save (qs);
   qs_unref (qs);
   return G_SOURCE_REMOVE;
@@ -199,7 +201,25 @@ qs_cache_schedule_save (QuickSettings *qs)
   if (qs == NULL || pending_id != 0)
     return;
   qs_ref (qs);
+  pending_qs = qs;
   pending_id = g_timeout_add (QS_CACHE_DEBOUNCE_MS, save_tick, qs);
+}
+
+void
+qs_cache_stop (void)
+{
+  if (pending_id != 0)
+    {
+      g_source_remove (pending_id);
+      pending_id = 0;
+    }
+  if (pending_qs != NULL)
+    {
+      QuickSettings *qs = pending_qs;
+
+      pending_qs = NULL;
+      qs_unref (qs);
+    }
 }
 
 void
