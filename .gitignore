@@ -2,6 +2,10 @@
 # test binaries (built by make test)
 tests/test-async
 tests/test-audio
+tests/test-audio-amixer
+tests/test-audio-flow
+tests/test-audio-none
+tests/test-audio-wpctl
 tests/test-bt
 tests/test-brightness
 tests/test-cache

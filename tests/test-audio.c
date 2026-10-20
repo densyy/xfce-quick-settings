@@ -27,9 +27,32 @@ static const gchar *DESCS =
 static void
 test_backend_probe (void)
 {
-  /* PATH só tem fakebin: pactl presente, wpctl/amixer ausentes. */
+  /* PATH só tem fakebin: pactl tem prioridade sobre wpctl/amixer. */
   g_assert_cmpint (audio_get_backend_cached (), ==, AUDIO_PACTL);
-  g_assert_false (audio_have_amixer_avail ());
+  g_assert_true (audio_have_amixer_avail ());
+}
+
+static void
+test_parse_null (void)
+{
+  GHashTable *descs = parse_pactl_descriptions (NULL, "Sink #");
+  GHashTable *mons = parse_pactl_monitor_sources (NULL);
+
+  g_assert_nonnull (descs);
+  g_assert_cmpuint (g_hash_table_size (descs), ==, 0);
+  g_assert_nonnull (mons);
+  g_assert_cmpuint (g_hash_table_size (mons), ==, 0);
+  g_hash_table_destroy (descs);
+  g_hash_table_destroy (mons);
+}
+
+static void
+test_list_backend_none (void)
+{
+  g_assert_null (list_sinks (AUDIO_NONE));
+  g_assert_null (list_sinks (AUDIO_WPCTL));
+  g_assert_null (list_sources (AUDIO_NONE));
+  g_assert_null (list_sources (AUDIO_WPCTL));
 }
 
 static void
@@ -181,6 +204,8 @@ main (int argc, char **argv)
   /* PATH restrito ao fakebin: probe determinístico, sem amixer. */
   g_setenv ("PATH", "tests/fakebin", TRUE);
   g_test_add_func ("/audio/backend_probe", test_backend_probe);
+  g_test_add_func ("/audio/parse_null", test_parse_null);
+  g_test_add_func ("/audio/list_backend_none", test_list_backend_none);
   g_test_add_func ("/audio/volume_icon", test_volume_icon);
   g_test_add_func ("/audio/dev_new", test_dev_new);
   g_test_add_func ("/audio/monitor_sources", test_monitor_sources);
