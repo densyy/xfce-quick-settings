@@ -12,9 +12,9 @@ Execução: `sh tests/run-tests.sh`. Sanitizers:
 
 | Ponto | Comando | Mecanismo | Cobertura atual |
 |---|---|---|---|
-| `qs-session.c` logout (XFCE) | `xfce4-session-logout --logout` | string fixa, sem interpolação | `test-e2e` `session_logout` clica no botão e exige `--logout` no log do fake. Depende de display; sem display o teste é skipado. |
-| `qs-session.c` logout (fallback) | `loginctl terminate-user %s` | `g_shell_quote (g_get_user_name ())` | **Não coberto.** O E2E tem `tests/fakebin/xfce4-session-logout` no PATH, então o ramo `loginctl` nunca é tomado. `tests/fakebin/loginctl` existe, mas nenhum teste o aciona. |
-| `qs-session.c` halt/reboot/hibernate/suspend | `xfce4-session-logout --halt` etc.; fallback `systemctl poweroff` etc. | strings fixas, sem dados interpolados | **Não coberto.** `test-ui` só verifica que os cinco botões existem; nenhum teste clica nesses quatro. Não há fake de `systemctl` em `tests/fakebin`. |
+| `qs-session.c` logout (XFCE) | `xfce4-session-logout --logout` | string fixa, sem interpolação | `test-e2e` `session_logout` e `test-session-actions` `/session/xfce_actions`: com `PATH=tests/fakebin`, os cinco botões (halt/reboot/hibernate/suspend/logout) são clicados e o fake registra `xfce4-session-logout --halt`, `--reboot`, `--hibernate`, `--suspend` e `--logout`, uma vez cada. Usa `GtkOffscreenWindow`; sem display é skipado. |
+| `qs-session.c` logout (fallback) | `loginctl terminate-user %s` | `g_shell_quote (g_get_user_name ())` | `test-session-actions` `/session/fallback_actions`: com `PATH=tests/fakebin-session` (sem `xfce4-session-logout`), o `loginctl` falso registra `loginctl terminate-user <usuário>`. O teste confere que `g_shell_quote` produz aspas simples ao redor do usuário; o shell as remove antes do fake. Depende de display; sem display é skipado. |
+| `qs-session.c` halt/reboot/hibernate/suspend | `xfce4-session-logout --halt` etc.; fallback `systemctl poweroff` etc. | strings fixas, sem dados interpolados | `test-session-actions`: `/session/xfce_actions` cobre os cinco botões via `xfce4-session-logout`; `/session/fallback_actions` cobre `systemctl poweroff`, `reboot`, `hibernate` e `suspend` com `PATH=tests/fakebin-session`. Antes de cada clique, `g_find_program_in_path` exige que o executável resolvido esteja no diretório fake; `/session/unknown_action` prova que ação desconhecida não executa nada e `/session/power_navigation` cobre tile/voltar. Depende de display; sem display é skipado. |
 | `qs-bt-backend.c` show/info/devices | `bluetoothctl --timeout 1 show %s`, `info %s`, `devices %s` | `g_shell_quote` no controller, no MAC e no filtro | `test-bt` cobre controller/list/info/devices com MAC fixo e `test-net` cobre `show AA:BB:CC:DD:EE:FF`. **Não há caso adversarial de MAC ou filtro**; o fuzz cobre apenas a classificação de erros. |
 | `qs-bluetooth.c` toggle/verify | `bluetoothctl --timeout 1 info %s`, `--timeout 10 %s %s` | `g_shell_quote (l->mac)` nos quatro pontos | `test-e2e` `bt_toggle_info` verifica o primeiro `info`; `test-bluetooth-flow` percorre a cadeia com MACs fixos. **Sem MAC hostil**; o quoting é verificado por inspeção do código. |
 | `qs-wifi.c` connect | `nmcli connection up %s`, `nmcli device wifi connect %s` (+ `password %s`) | `g_shell_quote` no SSID e na senha | `test-wifi-security` `connect_quotes_ssid`/`specials`: SSID com `;`, `$()` e crase chega como um único argv (`argc=4`) e os markers `/tmp/qs-sec-wifi*` ficam ausentes. `test-wifi-flow` cobre senha com valor simples. |
@@ -71,13 +71,19 @@ simular ferramenta ausente usam um diretório temporário vazio.
   `/sys/class/power_supply` real apenas em modo somente leitura; sem
   bateria, aceita o estado "sem energia". Nos testes, nenhuma escrita em
   sysfs real é feita; os caminhos de escrita usam backends falsos.
-- **Sessão:** `tests/fakebin/xfce4-session-logout` e
-  `tests/fakebin/loginctl` existem e registram argv. O E2E usa apenas o
-  primeiro. **Não há `tests/fakebin/systemctl` nesta árvore**, portanto o
-  fallback `systemctl` não é exercitado. A cobertura fake-based das ações
-  de sessão ainda não está presente nesta árvore; qualquer cobertura
-  futura deve usar um `systemctl` falso e PATH controlado, nunca o binário
-  real.
+- **Sessão:** `tests/fakebin/xfce4-session-logout` é usado por `test-e2e` e
+  por `test-session-actions` no caminho XFCE (`PATH=tests/fakebin`), no qual
+  os cinco botões (halt/reboot/hibernate/suspend/logout) são clicados e o
+  fake registra `xfce4-session-logout --halt`, `--reboot`, `--hibernate`,
+  `--suspend` e `--logout`. O fallback usa `PATH=tests/fakebin-session`, com
+  `tests/fakebin-session/systemctl` e `tests/fakebin-session/loginctl`, e
+  sem `xfce4-session-logout`: o `systemctl` falso registra
+  `poweroff`/`reboot`/`hibernate`/`suspend` e o `loginctl` falso registra
+  `terminate-user <usuário>` com `g_shell_quote` no usuário. Antes de cada
+  clique, `g_find_program_in_path` confirma que o binário resolvido está no
+  diretório fake; ação desconhecida não executa nada e a navegação
+  tile/voltar também é coberta. O teste usa `GtkOffscreenWindow` e faz skip
+  sem display.
 - **UI sem display:** os testes que constroem widgets chamam
   `gtk_init_check` e, sem display, fazem `g_test_skip ("needs display")`.
   Os testes de posicionamento (`test-popup`, `test-plugin`) mapeiam uma
@@ -89,10 +95,6 @@ simular ferramenta ausente usam um diretório temporário vazio.
 
 ## 4. Lacunas conhecidas
 
-- Logout pelo fallback `loginctl terminate-user` (só o caminho
-  `xfce4-session-logout` é coberto).
-- Ações halt/reboot/hibernate/suspend, tanto pelo XFCE quanto pelos
-  fallbacks `systemctl`.
 - MAC ou filtro hostil nos caminhos do `bluetoothctl` (backend e UI).
 - `wpctl set-default` com entrada adversarial.
 - `pactl set-default-sink/source` com id contendo espaço ou
