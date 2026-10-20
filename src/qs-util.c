@@ -60,6 +60,7 @@ typedef struct
   GSubprocess  *proc;
   GCancellable *cancellable;
   guint         timeout_id;
+  guint         timeout_secs;
 } QsAsync;
 
 static void
@@ -175,7 +176,7 @@ qs_async_launch (gpointer user_data)
     }
 
   a->cancellable = g_cancellable_new ();
-  a->timeout_id = g_timeout_add_seconds (QS_ASYNC_TIMEOUT_SECONDS,
+  a->timeout_id = g_timeout_add_seconds (a->timeout_secs,
                                          qs_async_timeout, a);
   /* GLib 2.88: g_subprocess_communicate_async ganhou o parâmetro
    * stdin_buf; NULL = sem stdin, equivalente à assinatura antiga de 4 args. */
@@ -185,9 +186,10 @@ qs_async_launch (gpointer user_data)
 }
 
 void
-run_command_async (const gchar *cmdline,
-                   QsCmdDone    done,
-                   gpointer     user_data)
+run_command_async_timeout (const gchar *cmdline,
+                            QsCmdDone    done,
+                            gpointer     user_data,
+                            guint        timeout_secs)
 {
   QsAsync *a;
 
@@ -198,12 +200,22 @@ run_command_async (const gchar *cmdline,
   a->cmdline = g_strdup (cmdline);
   a->done = done;
   a->user_data = user_data;
+  a->timeout_secs = (timeout_secs > 0) ? timeout_secs : QS_ASYNC_TIMEOUT_SECONDS;
   /* Agenda o launch no main context global como fonte (g_timeout_add é
    * thread-safe). Garante que spawn, timeout e done rodem SEMPRE dentro de
    * uma iteração do loop — nunca de forma síncrona ao chamador. Isso evita
    * que done()/g_main_loop_quit() dispare antes de g_main_loop_run() quando
    * a falha é imediata (ex.: binário inexistente). Sem threads. */
   g_timeout_add (0, qs_async_launch, a);
+}
+
+void
+run_command_async (const gchar *cmdline,
+                   QsCmdDone    done,
+                   gpointer     user_data)
+{
+  run_command_async_timeout (cmdline, done, user_data,
+                             QS_ASYNC_TIMEOUT_SECONDS);
 }
 
 /* Split an nmcli terse line on unescaped ':' (handles \: and \\). */

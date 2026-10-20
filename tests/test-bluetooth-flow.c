@@ -87,7 +87,8 @@ reset_fake_env (void)
     "QS_FAKE_BT_INFO_PAIRED", "QS_FAKE_BT_INFO_TRUSTED",
     "QS_FAKE_BT_INFO_CONNECTED", "QS_FAKE_BT_STATE",
     "QS_FAKE_BT_CONNECT_FAIL", "QS_FAKE_BT_DISCONNECT_FAIL",
-    "QS_FAKE_BT_KEEP_STATE"
+    "QS_FAKE_BT_CONNECT_DELAY_MS", "QS_FAKE_BT_CONNECT_STATE_EARLY",
+    "QS_FAKE_BT_KEEP_STATE", "QS_BT_LINK_TIMEOUT_SECS"
   };
   guint i;
 
@@ -982,6 +983,94 @@ test_link_disconnect_success (void)
   free_fixture (qs, stack, log);
 }
 
+/* Regressão do bug reportado: o `connect` é cortado pelo watchdog (o
+ * timeout genérico de 5 s matava o bluetoothctl no meio da conexão),
+ * mas o BlueZ conecta o aparelho mesmo assim. A UI não pode mostrar
+ * "Failed to connect": o estado real do dispositivo é o que manda. */
+static void
+test_link_connect_cut_short_but_connected (void)
+{
+  QuickSettings *qs;
+  GtkWidget     *stack;
+  GtkWidget     *row;
+  gchar         *log;
+  gchar         *state;
+
+  if (skip_no_display ())
+    return;
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+  state = g_build_filename (tmp_root, "bt-state-cut", NULL);
+  create_state_file (state, "no");
+  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
+  enable_connect_success ();
+  /* Watchdog curto: o connect é cortado no meio. */
+  g_setenv ("QS_BT_LINK_TIMEOUT_SECS", "1", TRUE);
+  /* O connect demora 6 s (mais que o watchdog genérico de 5 s), mas o
+   * BlueZ conecta logo no começo. */
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "6000", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_STATE_EARLY", "1", TRUE);
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+
+  g_signal_emit_by_name (qs->bt_list, "row-activated", row);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 10000));
+  assert_file_text (state, "yes\n");
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+  g_assert_true (row_connected (row));
+
+  g_free (state);
+  free_fixture (qs, stack, log);
+}
+
+/* O `connect` pode bloquear pelo timeout de página do BlueZ (10 s+): o
+ * comando precisa de um watchdog maior que o genérico de 5 s, senão ele
+ * morre antes de responder. */
+static void
+test_link_connect_slow_but_ok (void)
+{
+  QuickSettings *qs;
+  GtkWidget     *stack;
+  GtkWidget     *row;
+  gchar         *log;
+  gchar         *state;
+
+  if (skip_no_display ())
+    return;
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+  state = g_build_filename (tmp_root, "bt-state-slow", NULL);
+  create_state_file (state, "no");
+  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
+  enable_connect_success ();
+  /* Conecta depois de 6 s: maior que o watchdog genérico de 5 s. */
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "6000", TRUE);
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+
+  g_signal_emit_by_name (qs->bt_list, "row-activated", row);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 15000));
+  assert_file_text (state, "yes\n");
+
+  g_free (state);
+  free_fixture (qs, stack, log);
+}
+
 static void
 test_link_failure_detail (void)
 {
@@ -1013,10 +1102,12 @@ test_link_failure_detail (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-activated", row);
+  /* Antes de acusar falha o estado real é conferido (o comando pode ter
+   * sido cortado com o BlueZ ainda trabalhando). */
   g_assert_true (wait_label (qs->bt_status,
                              "Failed to connect Buds: Failed to connect: "
-                             "org.bluez.Error.Failed", FALSE, 5000));
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
+                             "org.bluez.Error.Failed", FALSE, 15000));
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 2);
   assert_file_text (state, "no\n");
 
   g_free (state);
@@ -1307,6 +1398,10 @@ main (int argc, char **argv)
   g_test_add_func ("/bt-flow/switch_reload", test_switch_reload);
   g_test_add_func ("/bt-flow/tile_probe", test_tile_probe);
   g_test_add_func ("/bt-flow/link_connect_success", test_link_connect_success);
+  g_test_add_func ("/bt-flow/link_connect_cut_short",
+                   test_link_connect_cut_short_but_connected);
+  g_test_add_func ("/bt-flow/link_connect_slow",
+                   test_link_connect_slow_but_ok);
   g_test_add_func ("/bt-flow/link_pair_trust", test_link_pair_trust_connect);
   g_test_add_func ("/bt-flow/link_disconnect", test_link_disconnect_success);
   g_test_add_func ("/bt-flow/link_failure_detail", test_link_failure_detail);

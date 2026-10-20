@@ -14,6 +14,10 @@
 #   QS_FAKE_BT_STATE=arquivo    estado Connected persistido entre comandos
 #   QS_FAKE_BT_CONNECT_FAIL=1|2 falha connect em stdout|stderr
 #   QS_FAKE_BT_DISCONNECT_FAIL=1|2 falha disconnect em stdout|stderr
+#   QS_FAKE_BT_CONNECT_DELAY_MS=ms connect demora (ms) antes de responder
+#   QS_FAKE_BT_CONNECT_STATE_EARLY=1 connect marca o estado Connected=yes
+#                                   ANTES da demora (o BlueZ conecta
+#                                   enquanto o cliente ainda espera)
 #   QS_FAKE_BT_KEEP_STATE=1     connect/disconnect nao alteram o estado
 echo "$*" >> "${QS_FAKE_LOG:-/dev/null}"
 if [ "$1" = "--timeout" ]; then shift 2; fi
@@ -144,6 +148,13 @@ case "$1" in
     printf 'Discovery started\n'
     ;;
   connect)
+    if [ "${QS_FAKE_BT_CONNECT_STATE_EARLY:-0}" = "1" ]; then
+      set_connected yes
+    fi
+    delay_ms="${QS_FAKE_BT_CONNECT_DELAY_MS:-0}"
+    if [ "$delay_ms" -gt 0 ] 2>/dev/null; then
+      sleep "$(printf '%d.%03d' $((delay_ms / 1000)) $((delay_ms % 1000)))"
+    fi
     if [ "${QS_FAKE_BT_CONNECT_FAIL:-0}" = "1" ]; then
       printf 'Failed to connect: org.bluez.Error.Failed\n'
       exit 0

@@ -16,6 +16,14 @@ void spawn_command (const gchar *cmdline);
 void run_command_async (const gchar *cmdline,
                         QsCmdDone    done,
                         gpointer     user_data);
+/* Same as run_command_async, but with an explicit watchdog timeout (in
+ * seconds). Use it for commands that may legitimately run longer than
+ * the default one (e.g. `bluetoothctl connect`, which blocks for the
+ * whole BlueZ page timeout). */
+void run_command_async_timeout (const gchar *cmdline,
+                                QsCmdDone    done,
+                                gpointer     user_data,
+                                guint        timeout_secs);
 /* Split an nmcli terse line on unescaped ':' (handles \: and \\). */
 gchar **split_terse_line (const gchar *line,
                           gint         expected_fields);

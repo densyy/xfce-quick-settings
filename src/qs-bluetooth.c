@@ -569,8 +569,11 @@ typedef struct
   gint           idx;
   gboolean       disconnecting;
   gint           verify_tries; /* remaining `info` re-reads in verify stage */
+  guint          verify_delay_ms; /* delay between verify re-reads */
   guint          verify_src; /* pending verify timeout (0 when none) */
   gboolean       cancelled; /* set by bt_cancel_all() / destroy path */
+  gboolean       verifying_after_fail; /* verifying state after a failed verb */
+  gchar         *fail_detail; /* error detail of the failed verb (owned) */
 } BtLink;
 
 /* Live chains, for bt_cancel_all() on destroy. Main loop only. */
@@ -595,6 +598,35 @@ bt_link_untrack (BtLink *l)
  * "Connected" label until the next manual Scan. */
 #define BT_VERIFY_MAX_TRIES 8
 #define BT_VERIFY_DELAY_MS 800
+
+/* Same idea, but after a verb that FAILED (or was cut short by our own
+ * watchdog): BlueZ may still be working in the background, so the real
+ * state is checked a few times before declaring failure. This is what
+ * turns "the command was cut short but the device did connect" from a
+ * false error into the proper success message. */
+#define BT_VERIFY_AFTER_FAIL_TRIES 6
+#define BT_VERIFY_AFTER_FAIL_DELAY_MS 500
+
+/* `bluetoothctl connect` blocks for the whole BlueZ page timeout (10 s
+ * and counting) — a device that is slow to wake up is still connecting
+ * when the generic 5 s watchdog fires, so the UI used to report
+ * "Failed to connect" while the device was actually connecting. The
+ * verbs therefore get their own timeout, always larger than the
+ * bluetoothctl --timeout used below, plus an env hook so the test
+ * suite can exercise the cut-short path in milliseconds. */
+#define BT_LINK_CTL_TIMEOUT_SECS 15
+#define BT_LINK_CMD_TIMEOUT_SECS 20
+
+static guint
+bt_link_timeout_secs (void)
+{
+  const gchar *env = g_getenv ("QS_BT_LINK_TIMEOUT_SECS");
+  gint         value;
+
+  if (env == NULL || !qs_parse_int_checked (env, &value) || value <= 0)
+    return BT_LINK_CMD_TIMEOUT_SECS;
+  return (guint) value;
+}
 
 static const gchar *
 bt_doing_label (const gchar *verb)
@@ -621,6 +653,7 @@ bt_link_free (BtLink *l)
   bt_link_untrack (l);
   g_free (l->mac);
   g_free (l->name);
+  g_free (l->fail_detail);
   g_strfreev (l->verbs);
   qs_unref (l->qs);
   g_free (l);
@@ -709,6 +742,27 @@ static void bt_link_verify_done (const gchar *output,
                                  gboolean     ok,
                                  gpointer     user_data);
 
+/* Starts the verify stage: re-reads `info` up to `tries` times (every
+ * `delay_ms`) to confirm the real device state before showing success
+ * or failure. Main loop only. */
+static void
+bt_link_start_verify (BtLink *l,
+                      gint    tries,
+                      guint   delay_ms)
+{
+  gchar *cmd;
+  gchar *mac_q;
+
+  gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
+  l->verify_tries = tries;
+  l->verify_delay_ms = delay_ms;
+  mac_q = g_shell_quote (l->mac);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
+  g_free (mac_q);
+  run_command_async (cmd, bt_link_verify_done, l);
+  g_free (cmd);
+}
+
 /* Re-reads `info` after a short delay while the verify stage is still
  * inconclusive. Main loop; the BtLink (qs ref + per-MAC busy) stays alive
  * until the final verdict. Checks dead/cancelled first. */
@@ -775,13 +829,22 @@ bt_link_verify_done (const gchar *output,
         {
           l->verify_tries--;
           gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-          l->verify_src = g_timeout_add (BT_VERIFY_DELAY_MS,
+          l->verify_src = g_timeout_add (l->verify_delay_ms,
                                          bt_verify_timeout, l);
         }
       else
         {
+          gchar *detail = NULL;
+
+          if (l->verifying_after_fail)
+            {
+              /* Keep the original error detail (the BlueZ error). */
+              detail = l->fail_detail;
+              l->fail_detail = NULL;
+            }
           bt_start_load_thread (l->qs);
-          bt_link_fail (l, "disconnect", NULL);
+          bt_link_fail (l, "disconnect", detail);
+          g_free (detail);
         }
       return;
     }
@@ -799,13 +862,23 @@ bt_link_verify_done (const gchar *output,
     {
       l->verify_tries--;
       gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-      l->verify_src = g_timeout_add (BT_VERIFY_DELAY_MS,
+      l->verify_src = g_timeout_add (l->verify_delay_ms,
                                      bt_verify_timeout, l);
     }
   else
     {
-      gchar *detail = bt_first_detail (output, errout);
+      gchar *detail = NULL;
 
+      if (l->verifying_after_fail)
+        {
+          /* Keep the original error detail (the BlueZ error). */
+          detail = l->fail_detail;
+          l->fail_detail = NULL;
+        }
+      else
+        {
+          detail = bt_first_detail (output, errout);
+        }
       bt_start_load_thread (l->qs);
       bt_link_fail (l, "connect", detail);
       g_free (detail);
@@ -833,6 +906,19 @@ bt_link_done (const gchar *output,
     {
       gchar *detail = bt_first_detail (output, errout);
 
+      if (g_strcmp0 (verb, "connect") == 0
+          || g_strcmp0 (verb, "disconnect") == 0)
+        {
+          /* The verb may have been cut short by our own watchdog while
+           * BlueZ kept working in the background: the device often does
+           * connect a moment later. Confirm the real state before
+           * showing an error. */
+          l->fail_detail = detail;
+          l->verifying_after_fail = TRUE;
+          bt_link_start_verify (l, BT_VERIFY_AFTER_FAIL_TRIES,
+                                BT_VERIFY_AFTER_FAIL_DELAY_MS);
+          return;
+        }
       bt_link_fail (l, verb, detail);
       g_free (detail);
       return;
@@ -854,16 +940,7 @@ bt_link_run_next (BtLink *l)
   if (l->verbs == NULL || l->verbs[l->idx] == NULL)
     {
       /* All verbs done: only trust `info` saying Connected yes/no. */
-      gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-      l->verify_tries = BT_VERIFY_MAX_TRIES;
-      {
-        gchar *mac_q = g_shell_quote (l->mac);
-
-        cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
-        g_free (mac_q);
-      }
-      run_command_async (cmd, bt_link_verify_done, l);
-      g_free (cmd);
+      bt_link_start_verify (l, BT_VERIFY_MAX_TRIES, BT_VERIFY_DELAY_MS);
       return;
     }
   gtk_label_set_text (GTK_LABEL (l->qs->bt_status),
@@ -871,11 +948,12 @@ bt_link_run_next (BtLink *l)
   {
     gchar *mac_q = g_shell_quote (l->mac);
 
-    cmd = g_strdup_printf ("bluetoothctl --timeout 10 %s %s",
-                           l->verbs[l->idx], mac_q);
+    cmd = g_strdup_printf ("bluetoothctl --timeout %d %s %s",
+                           BT_LINK_CTL_TIMEOUT_SECS, l->verbs[l->idx],
+                           mac_q);
     g_free (mac_q);
   }
-  run_command_async (cmd, bt_link_done, l);
+  run_command_async_timeout (cmd, bt_link_done, l, bt_link_timeout_secs ());
   g_free (cmd);
 }
 
