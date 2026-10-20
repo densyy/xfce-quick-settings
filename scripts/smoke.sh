@@ -5,7 +5,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-SO=build/libquicksettings.so
+SO=release/x86_64-linux/libquicksettings.so
 if [ ! -f "$SO" ]; then
   echo "ERRO: $SO não existe — rode 'make build' antes." >&2
   exit 1

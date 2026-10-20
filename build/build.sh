@@ -3,11 +3,15 @@ set -eu
 #
 # BUILD PLUGIN
 #
-cd "$(dirname "$0")/../.."
+# Compila o plugin e grava o artefato versionado em
+# release/x86_64-linux/libquicksettings.so (rastreador no git).
+# O install NUNCA builda: só instala o artefato já gerado.
+#
+cd "$(dirname "$0")/.."
 #
 # COMPILE SOURCES
 #
-mkdir -p build
+mkdir -p release/x86_64-linux
 cc -Wall -Wextra -Wconversion \
   -Werror=implicit-function-declaration \
   -Werror=incompatible-pointer-types \
@@ -15,7 +19,7 @@ cc -Wall -Wextra -Wconversion \
   -g -std=gnu11 -fPIC -O2 -shared \
   -fstack-protector-strong -fstack-clash-protection -fcf-protection \
   -D_FORTIFY_SOURCE=3 \
-  -o build/libquicksettings.so \
+  -o release/x86_64-linux/libquicksettings.so \
   src/qs-plugin.c src/qs-util.c src/qs-ui.c src/qs-audio.c \
   src/qs-display.c src/qs-net.c src/qs-power.c src/qs-session.c \
   src/qs-notify.c src/qs-sysmon.c src/qs-popup.c src/qs-theme.c \

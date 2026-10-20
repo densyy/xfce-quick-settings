@@ -22,7 +22,7 @@ cat > "$TMP_DESKTOP" <<EOF
 [Xfce Panel]
 Type=X-XFCE-PanelPlugin
 Name=Quick Settings
-Version=1.1.0
+Version=1.2.0
 Comment=Quick access to Wi-Fi, Bluetooth, brightness, volume and power settings for the Xfce panel
 Icon=preferences-system-symbolic
 X-XFCE-Module=quicksettings
@@ -31,10 +31,15 @@ X-XFCE-Internal=false
 X-XFCE-Unique=true
 EOF
 #
-# INSTALL FILES
+# INSTALL FILES (usa o artefato já buildado em release/; nunca builda)
 #
+SO="release/x86_64-linux/libquicksettings.so"
+if [ ! -f "$SO" ]; then
+  echo "ERRO: $SO não existe — rode 'make build' antes de instalar." >&2
+  exit 1
+fi
 $SUDO install -d "$PLUGIN_DIR"
-$SUDO install -m 755 build/libquicksettings.so "$PLUGIN_DIR/libquicksettings.so"
+$SUDO install -m 755 "$SO" "$PLUGIN_DIR/libquicksettings.so"
 $SUDO install -d "$DESKTOP_DIR"
 $SUDO install -m 644 "$TMP_DESKTOP" "$DESKTOP_DIR/quicksettings.desktop"
 rm -f "$TMP_DESKTOP"

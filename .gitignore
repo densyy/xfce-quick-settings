@@ -1,4 +1,3 @@
-/build/
 # test binaries (built by make test)
 tests/test-async
 tests/test-audio

@@ -41,3 +41,15 @@ Checklist do commit:
 
 - 1 commit por tarefa, na branch de trabalho; sem push sem aval.
 - Mensagens no formato `tipo(área): descrição curta`.
+
+## 4. Encerramento do trabalho (build da release)
+
+Quando o dono disser que o trabalho está concluído/encerrado:
+
+1. Rodar `sh build/build.sh` (ou `make build`): compila `src/` e grava
+   `release/x86_64-linux/libquicksettings.so` (artefato rastreado no git).
+2. Rodar `sh scripts/smoke.sh` para validar o `.so`.
+3. Subir a versão em `src/qs-core.h` + `install/common/desktop.sh`
+   (regra da seção 1) e commitar o `release/*.so` junto no mesmo commit.
+4. Só publicar no GitHub (`sh release/publish.sh`, precisa de `gh`
+   autenticado ou `GITHUB_TOKEN`) com aval explícito do dono.

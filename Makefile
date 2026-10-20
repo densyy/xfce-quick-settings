@@ -1,4 +1,6 @@
 # Quick Settings — alvos de desenvolvimento e validação.
+# build: compila src/ e grava o artefato em release/x86_64-linux/ (rastreador
+# no git). O install usa esse artefato e nunca builda.
 # analyze: análise estática profunda (GCC -fanalyzer) com as flags do build oficial.
 # cppcheck: opcional, roda se estiver no PATH.
 # smoke: build + verificação de dlopen + roteiro manual.
@@ -16,7 +18,7 @@ SRCS = $(wildcard src/*.c)
 .PHONY: build analyze cppcheck smoke test lint build-matrix spawn-budget sanitizers coverage clean
 
 build:
-	sh install/common/build.sh
+	sh build/build.sh
 
 analyze:
 	gcc -fanalyzer $(CFLAGS_QS) -o /tmp/quicksettings-analyze.so $(SRCS) \
@@ -48,11 +50,13 @@ sanitizers:
 coverage:
 	sh tests/run-coverage.sh
 
-# Remove build/, binários de teste (normal e sanitizer) e artefatos gcov
-# deixados no repo. A cobertura roda fora da árvore (QS_COV_DIR), então o
-# diretório de saída em /tmp não é apagado aqui.
+# Remove binários de teste (normal e sanitizer), artefatos gcov e o
+# diretório legado build/ (o script de build mora em build/build.sh e o
+# artefato rastreado fica em release/, que o clean nunca apaga).
+# A cobertura roda fora da árvore (QS_COV_DIR), então o diretório de
+# saída em /tmp não é apagado aqui.
 clean:
-	rm -rf build
+	rm -f build/libquicksettings.so
 	find tests -maxdepth 1 -type f -name 'test-*' \
 	  ! -name '*.c' ! -name '*.sh' ! -name '*.md' -delete
 	find . -path ./.git -prune -o \

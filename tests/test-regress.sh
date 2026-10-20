@@ -44,7 +44,7 @@ grep -q "X-XFCE-Unique=true" install/common/desktop.sh \
   || bad "desktop sem X-XFCE-Unique=true"
 
 # M04: -Wconversion no build oficial.
-grep -q "\-Wconversion" install/common/build.sh \
+grep -q "\-Wconversion" build/build.sh \
   || bad "build sem -Wconversion"
 
 if [ "$fail" -eq 0 ]; then
