@@ -13,6 +13,7 @@ tests/test-display-nav
 tests/test-lifecycle
 tests/test-monitor-data
 tests/test-net
+tests/test-notify-flow
 tests/test-notify-store
 tests/test-plugin
 tests/test-popup
