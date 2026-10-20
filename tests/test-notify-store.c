@@ -98,7 +98,7 @@ test_time_today (void)
 static void
 test_sqlite_roundtrip (void)
 {
-  gint64  base = g_get_real_time () - 3600 * 1000000;
+  gint64  base = g_get_real_time () - G_GINT64_CONSTANT (3600000000);
   GList  *notices;
   Notice *first;
   Notice *last;
@@ -119,7 +119,7 @@ test_sqlite_roundtrip (void)
 static void
 test_sqlite_signature (void)
 {
-  gint64 base = g_get_real_time () - 3600 * 1000000;
+  gint64 base = g_get_real_time () - G_GINT64_CONSTANT (3600000000);
   gint   count = 0;
   gint64 max_ts = 0;
 
