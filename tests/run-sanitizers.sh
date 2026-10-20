@@ -31,7 +31,7 @@ for t in tests/test-*.c; do
   # leak-check SÓ neles (ASan+UBSan continuam ativos em todos).
   leakcheck=detect_leaks=1
   case "$name" in
-    test-cache|test-lifecycle|test-wifi-security|test-e2e) leakcheck=detect_leaks=0 ;;
+    test-cache|test-lifecycle|test-wifi-flow|test-wifi-security|test-wifi-tile|test-e2e) leakcheck=detect_leaks=0 ;;
   esac
   if env ASAN_OPTIONS=${leakcheck}:halt_on_error=1 \
            UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \

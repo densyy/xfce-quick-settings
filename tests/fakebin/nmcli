@@ -1,8 +1,42 @@
 #!/bin/sh
-# Fake nmcli para testes: responde `radio wifi` e loga todo argv em $QS_FAKE_LOG.
+# Fake nmcli para testes: nunca toca no estado real de rede.
+# Loga todo argv em $QS_FAKE_LOG e responde por variaveis de ambiente.
+#   QS_FAKE_WIFI_STATE=disabled|enabled  radio wifi
+#   QS_FAKE_NMCLI_LIST                   saida de device wifi list (%b)
+#   QS_FAKE_NMCLI_PROFILES               saida de connection show (%b)
+#   QS_FAKE_NMCLI_SCAN_FAIL              forca falha do scan (mensagem)
+#   QS_FAKE_NMCLI_CONNECT_FAIL           forca falha de conexao (mensagem)
+#   QS_FAKE_NMCLI_CONNECT_SLEEP          segundos de espera na conexao
 echo "$*" >> "${QS_FAKE_LOG:-/dev/null}"
-if [ "$1" = "radio" ] && [ "$2" = "wifi" ] && [ $# -eq 2 ]; then
-  printf '%s\n' "${QS_FAKE_WIFI_STATE:-enabled}"
-  exit 0
-fi
+case "$*" in
+  "radio wifi")
+    printf '%s\n' "${QS_FAKE_WIFI_STATE:-enabled}"
+    exit 0
+    ;;
+  "radio wifi on"|"radio wifi off")
+    exit 0
+    ;;
+  *"device wifi list"*)
+    if [ -n "${QS_FAKE_NMCLI_SCAN_FAIL:-}" ]; then
+      printf '%s\n' "$QS_FAKE_NMCLI_SCAN_FAIL" >&2
+      exit 1
+    fi
+    printf '%b\n' "${QS_FAKE_NMCLI_LIST:-}"
+    exit 0
+    ;;
+  *"connection show"*)
+    printf '%b\n' "${QS_FAKE_NMCLI_PROFILES:-}"
+    exit 0
+    ;;
+  *"device wifi connect"*|*"connection up"*)
+    if [ -n "${QS_FAKE_NMCLI_CONNECT_SLEEP:-}" ]; then
+      sleep "$QS_FAKE_NMCLI_CONNECT_SLEEP"
+    fi
+    if [ -n "${QS_FAKE_NMCLI_CONNECT_FAIL:-}" ]; then
+      printf '%s\n' "$QS_FAKE_NMCLI_CONNECT_FAIL" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
 exit 0
