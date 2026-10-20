@@ -7,7 +7,7 @@
 /* Plugin version (single source of truth). Bumped on every AI change:
  * new feature/test -> MINOR (1.x.0), fix/docs -> PATCH (1.0.x).
  * See AGENTS.md. */
-#define QS_VERSION "1.0.1"
+#define QS_VERSION "1.1.0"
 
 /* Plugin state shared by all modules. Widgets are created by each
  * module's build function and refreshed by its refresh function. */
@@ -86,6 +86,7 @@ typedef struct
   gboolean         updating; /* TRUE while loading current values */
   guint            cache_seq; /* monotonic anti-stale counter (T3/T4/T5) */
   guint            fade_tick; /* tick callback id for 150ms open fade (0 = none) */
+  GtkWidget       *version_label; /* discreet "vX.Y.Z" at main bottom-right */
   gint             refcount; /* async ops hold a ref; free at zero */
   gboolean         dead; /* TRUE after free-data: don't touch widgets */
 } QuickSettings;

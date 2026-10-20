@@ -332,6 +332,18 @@ qs_plugin_build (GtkWidget      *container,
     session_build_section (action_grid, qs->stack, qs);
   }
 
+  /* Discreet version tag, bottom-right of the main page. */
+  {
+    gchar     *text = g_strdup_printf ("v%s", QS_VERSION);
+    GtkWidget *version = gtk_label_new (text);
+
+    g_free (text);
+    gtk_widget_set_halign (version, GTK_ALIGN_END);
+    ui_add_class (version, "qs-version");
+    gtk_box_pack_start (GTK_BOX (box), version, FALSE, FALSE, 0);
+    qs->version_label = version;
+  }
+
   g_signal_connect (qs->button, "clicked", G_CALLBACK (on_button_clicked), qs);
 
   audio_refresh_volume (qs);

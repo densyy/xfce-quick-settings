@@ -20,6 +20,8 @@ qs_theme_load (void)
     ".qs-mini-title { font-weight: bold; font-size: smaller; }"
     ".qs-sub, .qs-status { color: alpha(@theme_fg_color, 0.6);"
     " font-size: smaller; }"
+    ".qs-version { color: alpha(@theme_fg_color, 0.45);"
+    " font-size: smaller; }"
     ".qs-value { font-weight: bold; font-size: larger; }"
     ".qs-sys-num { font-weight: bold; font-size: 0.85em; }"
     ".qs-back { min-width: 32px; min-height: 32px; padding: 0;"

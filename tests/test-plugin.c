@@ -104,6 +104,37 @@ make_fake_log (const gchar *name)
   return log;
 }
 
+/* QS_VERSION segue semver (MAJOR.MINOR.PATCH); ver AGENTS.md. */
+static void
+test_version_format (void)
+{
+  g_assert_true (g_regex_match_simple ("^[0-9]+\\.[0-9]+\\.[0-9]+$",
+                                       QS_VERSION, 0, 0));
+}
+
+static GtkWidget *
+find_by_class (GtkWidget   *root,
+               const gchar *name)
+{
+  if (!GTK_IS_WIDGET (root))
+    return NULL;
+  if (gtk_style_context_has_class (gtk_widget_get_style_context (root),
+                                   name))
+    return root;
+  if (GTK_IS_CONTAINER (root))
+    {
+      GList     *kids = gtk_container_get_children (GTK_CONTAINER (root));
+      GList     *l;
+      GtkWidget *hit = NULL;
+
+      for (l = kids; l != NULL && hit == NULL; l = l->next)
+        hit = find_by_class (GTK_WIDGET (l->data), name);
+      g_list_free (kids);
+      return hit;
+    }
+  return NULL;
+}
+
 static void
 test_build_structure (void)
 {
@@ -147,6 +178,19 @@ test_build_structure (void)
   g_assert_nonnull (qs->notify_list);
   g_assert_nonnull (qs->sysmon_ram_value);
   g_assert_nonnull (qs->bat_label);
+
+  /* Version tag discreta no canto inferior direito da página main. */
+  {
+    gchar     *expected = g_strdup_printf ("v%s", QS_VERSION);
+    GtkWidget *version = find_by_class (main_box, "qs-version");
+
+    g_assert_nonnull (version);
+    g_assert_true (GTK_IS_LABEL (version));
+    g_assert_true (version == qs->version_label);
+    g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (version)), ==, expected);
+    g_assert_cmpint (gtk_widget_get_halign (version), ==, GTK_ALIGN_END);
+    g_free (expected);
+  }
 
   g_assert_true (g_file_get_contents (log, &contents, NULL, NULL));
   g_assert_nonnull (g_strstr_len (contents, -1, "pactl"));
@@ -333,6 +377,7 @@ main (int argc, char **argv)
   }
   g_free (cwd);
 
+  g_test_add_func ("/plugin/version_format", test_version_format);
   g_test_add_func ("/plugin/build_structure", test_build_structure);
   g_test_add_func ("/plugin/toggle_and_fade", test_toggle_and_fade);
   g_test_add_func ("/plugin/size_changed", test_size_changed);
