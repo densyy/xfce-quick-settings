@@ -1,0 +1,6 @@
+#!/bin/sh
+# systemctl falso para testes de fallback de sessão: loga argv, sai 0.
+if [ -n "${QS_FAKE_LOG:-}" ]; then
+  printf 'systemctl %s\n' "$*" >> "$QS_FAKE_LOG"
+fi
+exit 0

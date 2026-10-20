@@ -23,6 +23,7 @@ tests/test-plugin
 tests/test-popup
 tests/test-power
 tests/test-power-flow
+tests/test-session-actions
 tests/test-sysmon-data
 tests/test-sysmon-flow
 tests/test-theme
