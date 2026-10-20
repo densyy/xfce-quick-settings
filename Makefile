@@ -13,7 +13,7 @@ PKGS = gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0 sqlite3
 CFLAGS_QS = -Wall -Wextra -Wconversion -g -std=gnu11 -fPIC -O2 -shared -D_FORTIFY_SOURCE=3
 SRCS = $(wildcard src/*.c)
 
-.PHONY: build analyze cppcheck smoke test lint build-matrix spawn-budget sanitizers
+.PHONY: build analyze cppcheck smoke test lint build-matrix spawn-budget sanitizers coverage
 
 build:
 	sh install/common/build.sh
@@ -44,3 +44,6 @@ spawn-budget:
 
 sanitizers:
 	sh tests/run-sanitizers.sh
+
+coverage:
+	sh tests/run-coverage.sh
