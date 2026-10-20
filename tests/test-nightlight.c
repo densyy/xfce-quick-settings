@@ -115,6 +115,15 @@ destroy_section (QuickSettings *qs,
   qs_unref (qs);
 }
 
+/* Widgets sem pai mantem a ref flutuante: sink, destruir e soltar a ref. */
+static void
+destroy_widget (GtkWidget *widget)
+{
+  g_object_ref_sink (widget);
+  gtk_widget_destroy (widget);
+  g_object_unref (widget);
+}
+
 static void
 test_presets (void)
 {
@@ -297,10 +306,10 @@ test_update_sub_edges (void)
   night_update_sub (qs);
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (label)), ==, "Dawn");
 
-  gtk_widget_destroy (label);
-  gtk_widget_destroy (aft);
-  gtk_widget_destroy (night);
-  gtk_widget_destroy (dawn);
+  destroy_widget (label);
+  destroy_widget (aft);
+  destroy_widget (night);
+  destroy_widget (dawn);
   g_free (qs);
 }
 

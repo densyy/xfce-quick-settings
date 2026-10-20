@@ -55,6 +55,17 @@ skip_no_display (void)
   return FALSE;
 }
 
+/* gtk_widget_get_tooltip_text devolve string nova: liberar apos comparar. */
+static void
+assert_tooltip (GtkWidget   *widget,
+                const gchar *expected)
+{
+  gchar *tip = gtk_widget_get_tooltip_text (widget);
+
+  g_assert_cmpstr (tip, ==, expected);
+  g_free (tip);
+}
+
 static gchar *
 make_fake_dir (void)
 {
@@ -266,8 +277,7 @@ test_flow_refresh (void)
   audio_refresh_input_volume (qs);
   g_assert_true (wait_for_range (GTK_RANGE (qs->audio_out_vol_scale), 50, 5000));
   g_assert_true (wait_for_range (GTK_RANGE (qs->audio_in_vol_scale), 50, 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->audio_out_vol_scale),
-                   ==, "Volume");
+  assert_tooltip (qs->audio_out_vol_scale, "Volume");
   g_assert_cmpstr (image_icon_name (qs->audio_out_vol_icon),
                    ==, "audio-volume-medium-symbolic");
   g_assert_cmpstr (image_icon_name (qs->audio_in_vol_icon),
@@ -291,15 +301,13 @@ test_flow_refresh (void)
                    ==, "audio-volume-medium-symbolic");
   gtk_range_set_value (GTK_RANGE (qs->audio_out_vol_scale), 120);
   g_assert_true (wait_for_log (log, "set-sink-volume @DEFAULT_SINK@ 120%", 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->audio_out_vol_scale),
-                   ==, "Volume (boosted above 100%)");
+  assert_tooltip (qs->audio_out_vol_scale, "Volume (boosted above 100%)");
   g_assert_cmpstr (image_icon_name (qs->audio_out_vol_icon),
                    ==, "audio-volume-overamplified-symbolic");
 
   gtk_range_set_value (GTK_RANGE (qs->audio_in_vol_scale), 45);
   g_assert_true (wait_for_log (log, "set-source-volume @DEFAULT_SOURCE@ 45%", 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->audio_in_vol_scale),
-                   ==, "Input volume");
+  assert_tooltip (qs->audio_in_vol_scale, "Input volume");
   g_assert_cmpstr (image_icon_name (qs->audio_in_vol_icon),
                    ==, "audio-volume-medium-symbolic");
 
@@ -309,8 +317,7 @@ test_flow_refresh (void)
                    ==, "audio-volume-medium-symbolic");
   gtk_range_set_value (GTK_RANGE (qs->vol_scale), 130);
   g_assert_true (wait_for_log (log, "set-sink-volume @DEFAULT_SINK@ 130%", 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->vol_scale),
-                   ==, "Volume (boosted above 100%)");
+  assert_tooltip (qs->vol_scale, "Volume (boosted above 100%)");
 
   qs->updating = TRUE;
   gtk_range_set_value (GTK_RANGE (qs->vol_scale), 20);
@@ -473,14 +480,12 @@ test_flow_done_fallbacks (void)
   g_setenv ("QS_FAKE_VOLUME", "Volume: front-left: 131072 / 200% / 0 dB", TRUE);
   audio_refresh_volume (qs);
   g_assert_true (wait_for_range (GTK_RANGE (qs->vol_scale), 150, 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->vol_scale),
-                   ==, "Volume (boosted above 100%)");
+  assert_tooltip (qs->vol_scale, "Volume (boosted above 100%)");
 
   g_setenv ("QS_FAKE_VOLUME", "Volume: muted", TRUE);
   audio_refresh_volume (qs);
   g_assert_true (wait_for_insensitive (qs->vol_scale, 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->vol_scale),
-                   ==, "Volume unavailable");
+  assert_tooltip (qs->vol_scale, "Volume unavailable");
 
   g_setenv ("QS_FAKE_VOLUME", "Volume: mono: 32768 / 50% / -18.06 dB", TRUE);
   audio_refresh_input_volume (qs);

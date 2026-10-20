@@ -55,6 +55,26 @@ skip_no_display (void)
   return FALSE;
 }
 
+/* gtk_widget_get_tooltip_text devolve string nova: liberar apos comparar. */
+static void
+assert_tooltip (GtkWidget   *widget,
+                const gchar *expected)
+{
+  gchar *tip = gtk_widget_get_tooltip_text (widget);
+
+  g_assert_cmpstr (tip, ==, expected);
+  g_free (tip);
+}
+
+/* Widgets sem pai mantem a ref flutuante: sink, destruir e soltar a ref. */
+static void
+destroy_widget (GtkWidget *widget)
+{
+  g_object_ref_sink (widget);
+  gtk_widget_destroy (widget);
+  g_object_unref (widget);
+}
+
 static gboolean
 log_contains (const gchar *needle)
 {
@@ -166,8 +186,7 @@ test_wpctl_refresh_volume (void)
   g_assert_true (wait_for_range (GTK_RANGE (qs->audio_out_vol_scale), 50, 5000));
   g_assert_cmpstr (image_icon_name (qs->audio_out_vol_icon),
                    ==, "audio-volume-medium-symbolic");
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->audio_out_vol_scale),
-                   ==, "Volume");
+  assert_tooltip (qs->audio_out_vol_scale, "Volume");
 
   audio_refresh_input_volume (qs);
   g_assert_true (wait_for_range (GTK_RANGE (qs->audio_in_vol_scale), 50, 5000));
@@ -202,6 +221,9 @@ test_wpctl_devices (void)
   g_assert_true (gtk_widget_is_sensitive (qs->source_combo));
   g_assert_true (wait_for_log ("wpctl status", 5000));
 
+  destroy_widget (qs->sink_combo);
+  destroy_widget (qs->source_combo);
+  destroy_widget (qs->audio_sub);
   qs_unref (qs);
 }
 

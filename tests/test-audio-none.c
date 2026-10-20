@@ -35,6 +35,17 @@ skip_no_display (void)
   return FALSE;
 }
 
+/* gtk_widget_get_tooltip_text devolve string nova: liberar apos comparar. */
+static void
+assert_tooltip (GtkWidget   *widget,
+                const gchar *expected)
+{
+  gchar *tip = gtk_widget_get_tooltip_text (widget);
+
+  g_assert_cmpstr (tip, ==, expected);
+  g_free (tip);
+}
+
 static void
 test_none_probe (void)
 {
@@ -58,12 +69,10 @@ test_none_unavailable (void)
 
   audio_refresh_volume (qs);
   g_assert_false (gtk_widget_is_sensitive (qs->vol_scale));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->vol_scale),
-                   ==, "Volume unavailable");
+  assert_tooltip (qs->vol_scale, "Volume unavailable");
   audio_refresh_input_volume (qs);
   g_assert_false (gtk_widget_is_sensitive (qs->audio_in_vol_scale));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->audio_in_vol_scale),
-                   ==, "Volume unavailable");
+  assert_tooltip (qs->audio_in_vol_scale, "Volume unavailable");
 
   audio_refresh_devices (qs);
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->audio_sub)),

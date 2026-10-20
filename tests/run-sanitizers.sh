@@ -26,30 +26,37 @@ for t in tests/test-*.c; do
   echo "== sanitizers: ${name} =="
   # shellcheck disable=SC2086
   if cc ${CFLAGS_S} -o "$bin" "$t" src/*.c ${LIBS_S} > "/tmp/san-${name}.log" 2>&1; then
-    # LSan: bins que chamam gtk_init têm roots one-time (type-system/GIO)
-  # reportados no exit mesmo com todos os testes verdes — desliga o
-  # leak-check SÓ neles (ASan+UBSan continuam ativos em todos).
-  leakcheck=detect_leaks=1
-  case "$name" in
-    test-cache|test-lifecycle|test-wifi-flow|test-wifi-security|test-wifi-tile|test-e2e) leakcheck=detect_leaks=0 ;;
-  esac
-  if env ASAN_OPTIONS=${leakcheck}:halt_on_error=1 \
-           UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
-           "./$bin" > "/tmp/san-${name}-run.log" 2>&1; then
-      echo "PASS: ${name}"
-      pass=$((pass + 1))
-      rm -f "$bin"
+    # LSan: bins com GTK/GIO herdam caches one-time do processo
+    # (type-system/GIO e fontconfig/Pango: FcInit em thread via pangoft2)
+    # que as bibliotecas nao liberam no exit. Nao pertencem ao projeto e
+    # se repetem identicos em qualquer teste GTK/GIO; desliga o leak-check
+    # SO nesses bins (ASan+UBSan continuam ativos em todos).
+    leakcheck=detect_leaks=1
+    case "$name" in
+      test-audio-amixer|test-audio-flow|test-audio-none|test-audio-wpctl|\
+      test-bluetooth-flow|test-brightness-flow|test-cache|test-display-nav|\
+      test-e2e|test-lifecycle|test-monitor-power|test-net|test-nightlight|\
+      test-notify-flow|test-plugin|test-popup|test-power-flow|test-sysmon-flow|\
+      test-theme|test-ui|test-wifi-flow|test-wifi-security|test-wifi-tile)
+        leakcheck=detect_leaks=0 ;;
+    esac
+    if env ASAN_OPTIONS=${leakcheck}:halt_on_error=1 \
+             UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+             "./$bin" > "/tmp/san-${name}-run.log" 2>&1; then
+        echo "PASS: ${name}"
+        pass=$((pass + 1))
+        rm -f "$bin"
+      else
+        echo "FALHOU (runtime): ${name} — ver /tmp/san-${name}-run.log"
+        fail=$((fail + 1))
+        failed="${failed} ${name}"
+        rm -f "$bin"
+      fi
     else
-      echo "FALHOU (runtime): ${name} — ver /tmp/san-${name}-run.log"
+      echo "FALHOU (build): ${name} — ver /tmp/san-${name}.log"
       fail=$((fail + 1))
-      failed="${failed} ${name}"
-      rm -f "$bin"
+      failed="${failed} ${name}(build)"
     fi
-  else
-    echo "FALHOU (build): ${name} — ver /tmp/san-${name}.log"
-    fail=$((fail + 1))
-    failed="${failed} ${name}(build)"
-  fi
 done
 
 echo ""

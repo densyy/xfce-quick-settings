@@ -55,6 +55,17 @@ skip_no_display (void)
   return FALSE;
 }
 
+/* gtk_widget_get_tooltip_text devolve string nova: liberar apos comparar. */
+static void
+assert_tooltip (GtkWidget   *widget,
+                const gchar *expected)
+{
+  gchar *tip = gtk_widget_get_tooltip_text (widget);
+
+  g_assert_cmpstr (tip, ==, expected);
+  g_free (tip);
+}
+
 static gboolean
 log_contains (const gchar *needle)
 {
@@ -138,8 +149,7 @@ test_amixer_refresh_volume (void)
 
   audio_refresh_volume (qs);
   g_assert_true (wait_for_range (GTK_RANGE (qs->audio_out_vol_scale), 50, 5000));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->audio_out_vol_scale),
-                   ==, "Volume");
+  assert_tooltip (qs->audio_out_vol_scale, "Volume");
   audio_refresh_input_volume (qs);
   g_assert_true (wait_for_range (GTK_RANGE (qs->audio_in_vol_scale), 50, 5000));
   g_assert_true (wait_for_log ("amixer get Master", 5000));

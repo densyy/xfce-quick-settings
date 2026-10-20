@@ -368,6 +368,8 @@ test_net_navigation_flow (void)
 int
 main (int argc, char **argv)
 {
+  gchar *cwd;
+
   g_test_init (&argc, &argv, NULL);
   have_display = gtk_init_check (NULL, NULL);
   tmp_root = g_dir_make_tmp ("qs-test-net-XXXXXX", NULL);
@@ -376,7 +378,9 @@ main (int argc, char **argv)
   g_setenv ("XDG_DATA_HOME", tmp_root, TRUE);
 
   /* PATH só com fakes: nmcli/bluetoothctl reais nunca são chamados. */
-  fakebin = g_build_filename (g_get_current_dir (), "tests", "fakebin", NULL);
+  cwd = g_get_current_dir ();
+  fakebin = g_build_filename (cwd, "tests", "fakebin", NULL);
+  g_free (cwd);
   g_assert_true (g_file_test (fakebin, G_FILE_TEST_IS_DIR));
   g_setenv ("PATH", fakebin, TRUE);
   g_setenv ("QS_FAKE_WIFI_STATE", "enabled", TRUE);

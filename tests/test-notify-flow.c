@@ -98,6 +98,17 @@ skip_no_display (void)
   return FALSE;
 }
 
+/* gtk_widget_get_tooltip_text devolve string nova: liberar apos comparar. */
+static void
+assert_tooltip (GtkWidget   *widget,
+                const gchar *expected)
+{
+  gchar *tip = gtk_widget_get_tooltip_text (widget);
+
+  g_assert_cmpstr (tip, ==, expected);
+  g_free (tip);
+}
+
 /* --- sqlite de notificações no caminho usado pelo módulo --- */
 
 static sqlite3 *
@@ -403,7 +414,7 @@ test_rows_and_navigation (void)
   g_assert_cmpint (gtk_label_get_lines (GTK_LABEL (body)), ==, 1);
   g_assert_cmpint (gtk_label_get_ellipsize (GTK_LABEL (body)),
                    ==, PANGO_ELLIPSIZE_END);
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (row), ==, "Click to expand");
+  assert_tooltip (row, "Click to expand");
 
   click_row (row, GDK_BUTTON_PRIMARY);
   g_assert_cmpint (GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (row),
@@ -412,7 +423,7 @@ test_rows_and_navigation (void)
   g_assert_cmpint (gtk_label_get_lines (GTK_LABEL (body)), ==, -1);
   g_assert_cmpint (gtk_label_get_ellipsize (GTK_LABEL (body)),
                    ==, PANGO_ELLIPSIZE_NONE);
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (row), ==, "Click to collapse");
+  assert_tooltip (row, "Click to collapse");
 
   click_row (row, GDK_BUTTON_MIDDLE);
   g_assert_cmpint (GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (row),
@@ -811,7 +822,10 @@ test_async_probe_edges (void)
 
   qs_cache_stop ();
   g_free (path);
+  g_object_ref_sink (qs->notify_sub);
   gtk_widget_destroy (qs->notify_sub);
+  g_object_unref (qs->notify_sub);
+  qs->notify_sub = NULL;
   qs_unref (qs);
 }
 

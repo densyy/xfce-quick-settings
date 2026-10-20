@@ -72,6 +72,17 @@ run_isolated_data (gconstpointer data)
   run_isolated ((const gchar *) data);
 }
 
+/* gtk_widget_get_tooltip_text devolve string nova: liberar apos comparar. */
+static void
+assert_tooltip (GtkWidget   *widget,
+                const gchar *expected)
+{
+  gchar *tip = gtk_widget_get_tooltip_text (widget);
+
+  g_assert_cmpstr (tip, ==, expected);
+  g_free (tip);
+}
+
 static gchar *
 new_log (void)
 {
@@ -275,8 +286,7 @@ test_ctl_refresh (void)
   display_refresh_brightness (qs);
   g_assert_true (wait_value (qs, 50.0, 2000));
   g_assert_true (gtk_widget_is_sensitive (qs->bright_scale));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->bright_scale), ==,
-                   "Screen brightness");
+  assert_tooltip (qs->bright_scale, "Screen brightness");
   g_assert_true (log_has (log, "brightnessctl -c backlight -m"));
 
   g_setenv ("QS_FAKE_BRIGHT_PCT", "2", TRUE);
@@ -412,8 +422,7 @@ test_ctl_fallback_none (void)
   display_refresh_brightness (qs);
   run_loop_ms (300);
   g_assert_false (gtk_widget_is_sensitive (qs->bright_scale));
-  g_assert_cmpstr (gtk_widget_get_tooltip_text (qs->bright_scale), ==,
-                   "Brightness unavailable");
+  assert_tooltip (qs->bright_scale, "Brightness unavailable");
 
   free_qs (qs);
   g_free (bin);
