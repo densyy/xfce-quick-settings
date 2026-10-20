@@ -1,0 +1,30 @@
+#!/bin/sh
+# xrandr falso dedicado ao brilho: sem brightnessctl/xbacklight no PATH.
+# --verbose responde "Brightness: 0.50"; --query devolve um monitor conectado.
+# QS_FAKE_XRANDR_FAIL=1: sai 1 (força fallback).
+if [ -n "${QS_FAKE_LOG:-}" ]; then
+  printf 'xrandr %s\n' "$*" >> "$QS_FAKE_LOG"
+fi
+if [ -n "${QS_FAKE_XRANDR_FAIL:-}" ]; then
+  exit 1
+fi
+case "$1" in
+  --verbose)
+    printf '%s\n' \
+      "Screen 0: minimum 8 x 8, current 1920 x 1080, maximum 32767 x 32767" \
+      "HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 510mm x 290mm" \
+      "   1920x1080     60.00*+" \
+      "   Brightness: 0.50"
+    ;;
+  --query)
+    printf '%s\n' \
+      "Screen 0: minimum 8 x 8, current 1920 x 1080, maximum 32767 x 32767" \
+      "HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 510mm x 290mm" \
+      "   1920x1080     60.00*+  59.94" \
+      "   1280x720      60.00" \
+      "DP-1 connected 1280x1024+1920+0 (normal left inverted right x axis y axis) 380mm x 300mm" \
+      "   1280x1024     60.00*+" \
+      "   1024x768      60.00"
+    ;;
+esac
+exit 0

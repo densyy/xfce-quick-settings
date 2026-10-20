@@ -1,9 +1,30 @@
 #!/bin/sh
-# brightnessctl falso para testes E2E: loga argv; `g` responde 50.
+# brightnessctl falso: loga argv; consultas respondem percentual.
+# QS_FAKE_BRIGHT_PCT: percentual reportado (padrão 50).
+# QS_FAKE_BRIGHT_EMPTY=1: consultas não imprimem nada.
+# QS_FAKE_BRIGHT_CTL_EMPTY=1: só a forma com -c não imprime nada.
+# QS_FAKE_BRIGHT_FAIL=1: sai 1 antes de responder.
 if [ -n "${QS_FAKE_LOG:-}" ]; then
   printf 'brightnessctl %s\n' "$*" >> "$QS_FAKE_LOG"
 fi
-if [ "$1" = "g" ]; then
-  printf '50\n'
+if [ -n "${QS_FAKE_BRIGHT_FAIL:-}" ]; then
+  exit 1
 fi
+pct=${QS_FAKE_BRIGHT_PCT:-50}
+has_c=0
+for arg in "$@"; do
+  if [ "$arg" = "-c" ]; then
+    has_c=1
+  fi
+done
+if [ -n "${QS_FAKE_BRIGHT_EMPTY:-}" ]; then
+  exit 0
+fi
+if [ -n "${QS_FAKE_BRIGHT_CTL_EMPTY:-}" ] && [ "$has_c" -eq 1 ]; then
+  exit 0
+fi
+case "$*" in
+  *-m*) printf 'intel_backlight,%s%%\n' "$pct" ;;
+  g) printf '%s\n' "$pct" ;;
+esac
 exit 0

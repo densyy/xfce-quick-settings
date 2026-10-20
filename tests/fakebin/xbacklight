@@ -1,0 +1,14 @@
+#!/bin/sh
+# xbacklight falso: loga argv; -get responde 42; -set só registra.
+# QS_FAKE_XBACK_BAD=1: -get responde texto inválido (força fallback).
+if [ -n "${QS_FAKE_LOG:-}" ]; then
+  printf 'xbacklight %s\n' "$*" >> "$QS_FAKE_LOG"
+fi
+if [ "$1" = "-get" ]; then
+  if [ -n "${QS_FAKE_XBACK_BAD:-}" ]; then
+    printf 'unavailable\n'
+  else
+    printf '42\n'
+  fi
+fi
+exit 0
