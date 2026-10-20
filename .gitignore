@@ -14,8 +14,11 @@ tests/test-lifecycle
 tests/test-monitor-data
 tests/test-net
 tests/test-notify-store
+tests/test-plugin
+tests/test-popup
 tests/test-power
 tests/test-sysmon-data
+tests/test-theme
 tests/test-util
 tests/test-wifi
 tests/test-fuzz

@@ -1,5 +1,6 @@
 #include "qs-cache.h"
 #include "qs-core.h"
+#include "qs-plugin.h"
 #include "qs-ui.h"
 #include "qs-popup.h"
 #include "qs-audio.h"
@@ -111,10 +112,14 @@ static void
 on_button_clicked (GtkButton *button,
                    gpointer   user_data)
 {
-  QuickSettings *qs = user_data;
-
   (void) button;
 
+  qs_plugin_toggle_popup ((QuickSettings *) user_data);
+}
+
+void
+qs_plugin_toggle_popup (QuickSettings *qs)
+{
   qs_fade_cancel (qs);
 
   if (gtk_widget_get_visible (qs->popup))
@@ -207,32 +212,37 @@ on_button_clicked (GtkButton *button,
   qs->updating = FALSE;
 }
 
-static gboolean
-on_size_changed (XfcePanelPlugin *plugin,
-                 gint             size,
-                 gpointer         user_data)
+gboolean
+qs_plugin_size_changed (QuickSettings *qs,
+                        GtkWidget     *container,
+                        gint           size,
+                        gint           icon_size,
+                        gint           nrows)
 {
-  QuickSettings *qs = user_data;
-  gint           icon_size = xfce_panel_plugin_get_icon_size (plugin);
-  gint           nrows = (gint) xfce_panel_plugin_get_nrows (plugin);
-  gint           border = (size < 26) ? 1 : 2;
+  gint border = (size < 26) ? 1 : 2;
 
   if (nrows > 1)
     size /= nrows;
   gtk_image_set_pixel_size (GTK_IMAGE (qs->button_image), MAX (16, icon_size));
   gtk_widget_set_size_request (qs->button, size, size);
-  gtk_container_set_border_width (GTK_CONTAINER (plugin), (guint) border);
+  if (container != NULL)
+    gtk_container_set_border_width (GTK_CONTAINER (container), (guint) border);
   return TRUE;
 }
 
-static void
-quick_settings_free (XfcePanelPlugin *plugin,
-                     gpointer         user_data)
+static gboolean
+on_size_changed (XfcePanelPlugin *plugin,
+                 gint             size,
+                 gpointer         user_data)
 {
-  QuickSettings *qs = user_data;
+  return qs_plugin_size_changed (user_data, GTK_WIDGET (plugin), size,
+                                 xfce_panel_plugin_get_icon_size (plugin),
+                                 (gint) xfce_panel_plugin_get_nrows (plugin));
+}
 
-  (void) plugin;
-
+void
+qs_plugin_teardown (QuickSettings *qs)
+{
   g_atomic_int_set (&qs->dead, TRUE);
   sysmon_stop (qs);
   power_stop (qs);
@@ -245,7 +255,17 @@ quick_settings_free (XfcePanelPlugin *plugin,
 }
 
 static void
-construct_quick_settings (XfcePanelPlugin *plugin)
+quick_settings_free (XfcePanelPlugin *plugin,
+                     gpointer         user_data)
+{
+  (void) plugin;
+
+  qs_plugin_teardown (user_data);
+}
+
+void
+qs_plugin_build (GtkWidget      *container,
+                 QuickSettings **out)
 {
   QuickSettings *qs;
   GtkWidget     *box;
@@ -255,16 +275,13 @@ construct_quick_settings (XfcePanelPlugin *plugin)
 
   ui_load_css ();
 
-  xfce_panel_plugin_set_small (plugin, TRUE);
-
   qs->button = gtk_button_new ();
   qs->button_image = gtk_image_new_from_icon_name ("preferences-system-symbolic",
                                                    GTK_ICON_SIZE_BUTTON);
   gtk_button_set_relief (GTK_BUTTON (qs->button), GTK_RELIEF_NONE);
   gtk_widget_set_tooltip_text (qs->button, "Quick Settings");
   gtk_container_add (GTK_CONTAINER (qs->button), qs->button_image);
-  gtk_container_add (GTK_CONTAINER (plugin), qs->button);
-  xfce_panel_plugin_add_action_widget (plugin, qs->button);
+  gtk_container_add (GTK_CONTAINER (container), qs->button);
 
   qs->popup = gtk_window_new (GTK_WINDOW_TOPLEVEL);
   gtk_window_set_decorated (GTK_WINDOW (qs->popup), FALSE);
@@ -316,10 +333,7 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   }
 
   g_signal_connect (qs->button, "clicked", G_CALLBACK (on_button_clicked), qs);
-  g_signal_connect (plugin, "size-changed", G_CALLBACK (on_size_changed), qs);
-  g_signal_connect (plugin, "free-data", G_CALLBACK (quick_settings_free), qs);
 
-  on_size_changed (plugin, xfce_panel_plugin_get_size (plugin), qs);
   audio_refresh_volume (qs);
   display_refresh_brightness (qs);
   display_refresh_tile (qs);
@@ -328,6 +342,23 @@ construct_quick_settings (XfcePanelPlugin *plugin)
   net_refresh_bt_tile (qs);
   power_refresh (qs);
 
+  *out = qs;
+}
+
+static void
+construct_quick_settings (XfcePanelPlugin *plugin)
+{
+  QuickSettings *qs;
+
+  xfce_panel_plugin_set_small (plugin, TRUE);
+  qs_plugin_build (GTK_WIDGET (plugin), &qs);
+  xfce_panel_plugin_add_action_widget (plugin, qs->button);
+  g_signal_connect (plugin, "size-changed", G_CALLBACK (on_size_changed), qs);
+  g_signal_connect (plugin, "free-data", G_CALLBACK (quick_settings_free), qs);
+  qs_plugin_size_changed (qs, GTK_WIDGET (plugin),
+                          xfce_panel_plugin_get_size (plugin),
+                          xfce_panel_plugin_get_icon_size (plugin),
+                          (gint) xfce_panel_plugin_get_nrows (plugin));
   gtk_widget_show_all (GTK_WIDGET (plugin));
 }
 
