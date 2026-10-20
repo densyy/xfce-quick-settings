@@ -35,3 +35,11 @@ tests/test-wifi-tile
 tests/test-perf
 tests/test-ui
 tests/test-e2e
+
+# sanitizer test binaries (built by make sanitizers)
+tests/test-*-san
+
+# gcov artifacts if coverage runs in-tree
+*.gcda
+*.gcno
+*.gcov

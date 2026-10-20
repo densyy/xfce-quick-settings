@@ -13,7 +13,7 @@ PKGS = gtk+-3.0 libxfce4panel-2.0 libxfce4ui-2 libxfce4util-1.0 sqlite3
 CFLAGS_QS = -Wall -Wextra -Wconversion -g -std=gnu11 -fPIC -O2 -shared -D_FORTIFY_SOURCE=3
 SRCS = $(wildcard src/*.c)
 
-.PHONY: build analyze cppcheck smoke test lint build-matrix spawn-budget sanitizers coverage
+.PHONY: build analyze cppcheck smoke test lint build-matrix spawn-budget sanitizers coverage clean
 
 build:
 	sh install/common/build.sh
@@ -47,3 +47,14 @@ sanitizers:
 
 coverage:
 	sh tests/run-coverage.sh
+
+# Remove build/, binários de teste (normal e sanitizer) e artefatos gcov
+# deixados no repo. A cobertura roda fora da árvore (QS_COV_DIR), então o
+# diretório de saída em /tmp não é apagado aqui.
+clean:
+	rm -rf build
+	find tests -maxdepth 1 -type f -name 'test-*' \
+	  ! -name '*.c' ! -name '*.sh' ! -name '*.md' -delete
+	find . -path ./.git -prune -o \
+	  \( -name '*.gcda' -o -name '*.gcno' -o -name '*.gcov' \) \
+	  -exec rm -f {} +
