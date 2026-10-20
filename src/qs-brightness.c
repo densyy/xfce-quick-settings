@@ -45,6 +45,16 @@ static gboolean bright_has_xback = FALSE;
 static gboolean bright_has_xrandr = FALSE;
 static gboolean bright_tools_probed = FALSE;
 
+/* Raiz sysfs. QS_BACKLIGHT_DIR permite aos testes isolar um diretório
+ * temporário (sem tocar em /sys); ausente, usa o caminho real. */
+static const gchar *
+bright_sysfs_root (void)
+{
+  const gchar *dir = g_getenv ("QS_BACKLIGHT_DIR");
+
+  return (dir != NULL && *dir != '\0') ? dir : "/sys/class/backlight";
+}
+
 static guint bright_timer_id = 0;
 static gint bright_pending_val = -1;
 
@@ -121,7 +131,7 @@ bright_valid_dev (const gchar *s)
 static gchar *
 pick_backlight_device (void)
 {
-  GDir *dir = g_dir_open ("/sys/class/backlight", 0, NULL);
+  GDir *dir = g_dir_open (bright_sysfs_root (), 0, NULL);
   const gchar *e;
   gchar *best = NULL;
   gint best_score = -1;
@@ -130,7 +140,7 @@ pick_backlight_device (void)
     return NULL;
   while ((e = g_dir_read_name (dir)) != NULL)
     {
-      gchar *mp = g_build_filename ("/sys/class/backlight", e,
+      gchar *mp = g_build_filename (bright_sysfs_root (), e,
                                     "max_brightness", NULL);
       gchar *c = NULL;
       gint maxv = 0;
@@ -255,9 +265,9 @@ bright_read_sysfs (void)
 
   if (dev == NULL)
     return -1;
-  bright_path = g_build_filename ("/sys/class/backlight", dev,
+  bright_path = g_build_filename (bright_sysfs_root (), dev,
                                   "brightness", NULL);
-  max_path = g_build_filename ("/sys/class/backlight", dev,
+  max_path = g_build_filename (bright_sysfs_root (), dev,
                                "max_brightness", NULL);
   if (g_file_get_contents (bright_path, &contents, NULL, NULL)
       && qs_parse_int_checked (contents, &brightness))
@@ -613,7 +623,7 @@ set_brightness_percent (gint value)
   dev = bright_ensure_dev ();
   if (dev != NULL)
     {
-      gchar *max_path = g_build_filename ("/sys/class/backlight", dev,
+      gchar *max_path = g_build_filename (bright_sysfs_root (), dev,
                                           "max_brightness", NULL);
       gchar *contents = NULL;
       gint max_brightness = 0;
@@ -622,7 +632,7 @@ set_brightness_percent (gint value)
           && qs_parse_int_checked (contents, &max_brightness)
           && max_brightness > 0)
         {
-          gchar *bright_path = g_build_filename ("/sys/class/backlight",
+          gchar *bright_path = g_build_filename (bright_sysfs_root (),
                                                  dev, "brightness", NULL);
           gchar *cmd = g_strdup_printf ("%d",
                                         (gint) (((gint64) value
