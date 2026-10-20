@@ -1,0 +1,12 @@
+#!/bin/sh
+# fake amixer para testes de audio (backend NONE). Loga argv em $QS_FAKE_LOG.
+if [ -n "${QS_FAKE_LOG:-}" ]; then printf 'amixer %s\n' "$*" >> "$QS_FAKE_LOG"; fi
+case "$*" in
+"get Master")
+printf "Simple mixer control 'Master',0\n  Capabilities: pvolume pswitch pswitch-joined\n  Playback channels: Front Left - Front Right\n  Limits: Playback 0 - 65536\n  Front Left: Playback 32768 [50%%] [-18.06dB] [on]\n  Front Right: Playback 32768 [50%%] [-18.06dB] [on]\n"
+;;
+"get Capture")
+printf "Simple mixer control 'Capture',0\n  Capabilities: cvolume cswitch\n  Capture channels: Front Left - Front Right\n  Limits: Capture 0 - 65536\n  Front Left: Capture 32768 [50%%] [-18.06dB] [on]\n  Front Right: Capture 32768 [50%%] [-18.06dB] [on]\n"
+;;
+esac
+exit 0

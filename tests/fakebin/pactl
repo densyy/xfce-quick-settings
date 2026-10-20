@@ -15,7 +15,13 @@ printf '0\talsa_input.pci-0\tmodule-alsa\n1\tbluez_output.AB.monitor\tmodule-blu
 printf 'Source #0\n\tState: RUNNING\n\tName: alsa_input.pci-0\n\tDescription: Built-in Mic\n\tMonitor of Sink: n/a\nSource #1\n\tState: IDLE\n\tName: bluez_output.AB.monitor\n\tDescription: Monitor of Headphones\n\tMonitor of Sink: 1\nSource #2\n\tState: IDLE\n\tName: alsa_output.pci-0.monitor\n\tDescription: Monitor of Built-in Audio\n\tMonitor of Sink: 0\n';;
 "get-default-source")
 printf 'alsa_input.pci-0\n';;
+"get-sink-volume @DEFAULT_SINK@")
+printf 'Volume: front-left: 32768 /  50%% / -18.06 dB,   front-right: 32768 /  50%% / -18.06 dB\n';;
+"get-source-volume @DEFAULT_SOURCE@")
+printf 'Volume: mono: 32768 /  50%% / -18.06 dB\n';;
 "list short sink-inputs")
 printf '5\t0\tfoo\n9\t1\tbar\n';;
+"list short source-outputs")
+printf '7\t0\tfoo\n';;
 *) exit 0;;
 esac

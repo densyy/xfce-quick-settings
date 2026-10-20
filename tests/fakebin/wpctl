@@ -1,0 +1,12 @@
+#!/bin/sh
+# fake wpctl para testes de audio. Rode com PATH apontando para este dir.
+# Loga argv em $QS_FAKE_LOG; volume 0.50 (50%); status com Sinks/Sources.
+if [ -n "${QS_FAKE_LOG:-}" ]; then printf 'wpctl %s\n' "$*" >> "$QS_FAKE_LOG"; fi
+case "$*" in
+"get-volume @DEFAULT_AUDIO_SINK@"|"get-volume @DEFAULT_AUDIO_SOURCE@"|"get-volume @DEFAULT_SOURCE@")
+printf 'Volume: 0.50\n';;
+"status")
+printf 'Audio\n ├─ Devices:\n │      56. Built-in Audio [vol: 1.00]\n │      57. Headphones [vol: 0.80]\n ├─ Sinks:\n │  *   56. Built-in Audio [vol: 1.00]\n │      57. Headphones [vol: 0.80]\n ├─ Sources:\n │  *   58. Built-in Microphone [vol: 1.00]\n │      59. Monitor of Built-in Audio [vol: 1.00]\n ├─ Filters:\n │     -1. Default [vol: 1.00]\n └─ Settings:\n'
+;;
+esac
+exit 0
