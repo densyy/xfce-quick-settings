@@ -224,8 +224,9 @@ split_terse_line (const gchar *line,
         }
       else if (*p == ':' && fields->len < (guint) (expected_fields - 1))
         {
-          g_ptr_array_add (fields, g_strdup (cur->str));
-          g_string_truncate (cur, 0);
+          /* Steal the field buffer and start a fresh GString. */
+          g_ptr_array_add (fields, g_string_free (cur, FALSE));
+          cur = g_string_new (NULL);
           p++;
         }
       else

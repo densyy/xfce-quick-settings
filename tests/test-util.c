@@ -90,6 +90,89 @@ test_split_limit (void)
 }
 
 static void
+test_split_single (void)
+{
+  gchar **parts = split_terse_line ("a:b:c", 1);
+
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 1);
+  g_assert_cmpstr (parts[0], ==, "a:b:c");
+  g_assert_null (parts[1]);
+  g_strfreev (parts);
+
+  parts = split_terse_line ("", 1);
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 1);
+  g_assert_cmpstr (parts[0], ==, "");
+  g_assert_null (parts[1]);
+  g_strfreev (parts);
+}
+
+static void
+test_split_escapes (void)
+{
+  gchar **parts = split_terse_line ("a\\:b:c\\\\d:e", 3);
+
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 3);
+  g_assert_cmpstr (parts[0], ==, "a:b");
+  g_assert_cmpstr (parts[1], ==, "c\\d");
+  g_assert_cmpstr (parts[2], ==, "e");
+  g_strfreev (parts);
+
+  /* barra invertida final não escapa o terminador */
+  parts = split_terse_line ("tail\\", 2);
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 2);
+  g_assert_cmpstr (parts[0], ==, "tail\\");
+  g_assert_cmpstr (parts[1], ==, "");
+  g_strfreev (parts);
+
+  /* "\\:" = barra literal seguida de separador */
+  parts = split_terse_line ("a\\\\:b", 2);
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 2);
+  g_assert_cmpstr (parts[0], ==, "a\\");
+  g_assert_cmpstr (parts[1], ==, "b");
+  g_strfreev (parts);
+}
+
+static void
+test_split_empty_fields (void)
+{
+  gchar **parts = split_terse_line (":a::b:", 5);
+
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 5);
+  g_assert_cmpstr (parts[0], ==, "");
+  g_assert_cmpstr (parts[1], ==, "a");
+  g_assert_cmpstr (parts[2], ==, "");
+  g_assert_cmpstr (parts[3], ==, "b");
+  g_assert_cmpstr (parts[4], ==, "");
+  g_strfreev (parts);
+
+  parts = split_terse_line ("a:", 2);
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 2);
+  g_assert_cmpstr (parts[0], ==, "a");
+  g_assert_cmpstr (parts[1], ==, "");
+  g_strfreev (parts);
+}
+
+static void
+test_split_extra (void)
+{
+  gchar **parts = split_terse_line ("a:b:c:d", 3);
+
+  g_assert_nonnull (parts);
+  g_assert_cmpuint (g_strv_length (parts), ==, 3);
+  g_assert_cmpstr (parts[0], ==, "a");
+  g_assert_cmpstr (parts[1], ==, "b");
+  g_assert_cmpstr (parts[2], ==, "c:d");
+  g_strfreev (parts);
+}
+
+static void
 test_percent (void)
 {
   g_assert_cmpint (parse_first_percent ("Volume: 55%"), ==, 55);
@@ -130,6 +213,10 @@ main (gint argc, gchar **argv)
   g_test_add_func ("/util/split/escape", test_split_escape);
   g_test_add_func ("/util/split/pad", test_split_pad);
   g_test_add_func ("/util/split/limit", test_split_limit);
+  g_test_add_func ("/util/split/single", test_split_single);
+  g_test_add_func ("/util/split/escapes", test_split_escapes);
+  g_test_add_func ("/util/split/empty_fields", test_split_empty_fields);
+  g_test_add_func ("/util/split/extra", test_split_extra);
   g_test_add_func ("/util/percent", test_percent);
   g_test_add_func ("/util/command_exists", test_command_exists);
   g_test_add_func ("/util/run_command", test_run_command);
