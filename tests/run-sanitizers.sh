@@ -36,8 +36,8 @@ for t in tests/test-*.c; do
       test-audio-amixer|test-audio-flow|test-audio-none|test-audio-wpctl|\
       test-bluetooth-flow|test-brightness-flow|test-cache|test-display-nav|\
       test-e2e|test-lifecycle|test-monitor-power|test-net|test-nightlight|\
-      test-notify-flow|test-plugin|test-popup|test-power-flow|test-sysmon-flow|\
-      test-theme|test-ui|test-wifi-flow|test-wifi-security|test-wifi-tile)
+      test-notify-flow|test-plugin|test-popup|test-power-flow|test-session-actions|\
+      test-sysmon-flow|test-theme|test-ui|test-wifi-flow|test-wifi-security|test-wifi-tile)
         leakcheck=detect_leaks=0 ;;
     esac
     if env ASAN_OPTIONS=${leakcheck}:halt_on_error=1 \
