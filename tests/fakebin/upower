@@ -2,13 +2,32 @@
 # upower falso para testes: responde `upower -e` e `upower -i <path>`.
 # 100% printf (sem cat): funciona mesmo com PATH restrito a este dir.
 # Loga argv em $QS_FAKE_LOG quando definido (padrão dos fakebins).
+# Falhas simuladas (nenhuma toca no upower real):
+#   QS_FAKE_UPOWER_NO_BATTERY   -e sem linha de bateria
+#   QS_FAKE_UPOWER_LIST_FAIL    -e sai 1
+#   QS_FAKE_UPOWER_DETAIL_FAIL  -i sai 1 (sem saída)
+#   QS_FAKE_UPOWER_DETAIL       saída de -i (printf %b)
 if [ -n "${QS_FAKE_LOG:-}" ]; then
   printf 'upower %s\n' "$*" >> "$QS_FAKE_LOG"
 fi
 if [ "$1" = "-e" ]; then
+  if [ -n "${QS_FAKE_UPOWER_LIST_FAIL:-}" ]; then
+    printf '%s\n' "upower: failed to enumerate devices" >&2
+    exit 1
+  fi
   printf '%s\n' "/org/freedesktop/UPower/devices/line_power_AC"
-  printf '%s\n' "/org/freedesktop/UPower/devices/battery_BAT0"
+  if [ -z "${QS_FAKE_UPOWER_NO_BATTERY:-}" ]; then
+    printf '%s\n' "/org/freedesktop/UPower/devices/battery_BAT0"
+  fi
 elif [ "$1" = "-i" ]; then
+  if [ -n "${QS_FAKE_UPOWER_DETAIL_FAIL:-}" ]; then
+    printf '%s\n' "upower: failed to get device properties" >&2
+    exit 1
+  fi
+  if [ -n "${QS_FAKE_UPOWER_DETAIL:-}" ]; then
+    printf '%b\n' "$QS_FAKE_UPOWER_DETAIL"
+    exit 0
+  fi
   printf '%s\n' "  native-path:          BAT0"
   printf '%s\n' "  vendor:               Test"
   printf '%s\n' "  model:                Fake Battery"

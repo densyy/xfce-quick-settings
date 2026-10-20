@@ -12,7 +12,7 @@
 
 #define POWER_DATA_LOADING "qs-power-loading"
 
-static gboolean power_tick (gpointer data);
+gboolean power_tick (gpointer data);
 
 /* First "upower -e" line mentioning a battery, or NULL (caller frees).
  * Puro (só parse): usado no callback async, sem spawn. */
@@ -108,13 +108,24 @@ power_parse_detail (const gchar *output,
   return TRUE;
 }
 
+/* Raiz sysfs. QS_POWER_SUPPLY_DIR permite aos testes isolar um diretório
+ * temporário (sem tocar em /sys); ausente, usa o caminho real. */
+static const gchar *
+power_supply_root (void)
+{
+  const gchar *dir = g_getenv ("QS_POWER_SUPPLY_DIR");
+
+  return (dir != NULL && *dir != '\0') ? dir : "/sys/class/power_supply";
+}
+
 /* Fallback without UPower: first power_supply entry with type==Battery. */
 static gboolean
 get_battery_sysfs (gint   *percent,
                    gchar **state_out,
                    gchar **time_out)
 {
-  GDir        *dir = g_dir_open ("/sys/class/power_supply", 0, NULL);
+  const gchar *root = power_supply_root ();
+  GDir        *dir = g_dir_open (root, 0, NULL);
   const gchar *entry;
   gboolean     found = FALSE;
 
@@ -123,18 +134,16 @@ get_battery_sysfs (gint   *percent,
     return FALSE;
   while (!found && (entry = g_dir_read_name (dir)) != NULL)
     {
-      gchar *type_path = g_build_filename ("/sys/class/power_supply", entry,
-                                           "type", NULL);
+      gchar *type_path = g_build_filename (root, entry, "type", NULL);
       gchar *type = NULL;
 
       if (g_file_get_contents (type_path, &type, NULL, NULL))
         {
           if (g_strcmp0 (g_strstrip (type), "Battery") == 0)
             {
-              gchar *cap_path = g_build_filename ("/sys/class/power_supply",
-                                                  entry, "capacity", NULL);
-              gchar *st_path = g_build_filename ("/sys/class/power_supply",
-                                                 entry, "status", NULL);
+              gchar *cap_path = g_build_filename (root, entry, "capacity",
+                                                  NULL);
+              gchar *st_path = g_build_filename (root, entry, "status", NULL);
               gchar *cap = NULL;
 
               if (g_file_get_contents (cap_path, &cap, NULL, NULL))
@@ -373,7 +382,7 @@ power_refresh (QuickSettings *qs)
   run_command_async ("upower -e", power_upower_list_done, qs);
 }
 
-static gboolean
+gboolean
 power_tick (gpointer data)
 {
   QuickSettings *qs = data;

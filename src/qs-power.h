@@ -11,6 +11,8 @@ void power_refresh (QuickSettings *qs);
 void power_start (QuickSettings *qs);
 /* Stops the 30s timer. */
 void power_stop (QuickSettings *qs);
+/* Timer callback (exposed for tests): G_SOURCE_CONTINUE while alive. */
+gboolean power_tick (gpointer data);
 
 /* Pure helpers exposed for tests (no widget access). */
 gchar       *power_parse_battery_path (const gchar *output);

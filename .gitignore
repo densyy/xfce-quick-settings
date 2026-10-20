@@ -22,7 +22,9 @@ tests/test-notify-store
 tests/test-plugin
 tests/test-popup
 tests/test-power
+tests/test-power-flow
 tests/test-sysmon-data
+tests/test-sysmon-flow
 tests/test-theme
 tests/test-util
 tests/test-wifi
