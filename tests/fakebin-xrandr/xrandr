@@ -1,11 +1,17 @@
 #!/bin/sh
-# xrandr falso dedicado ao brilho: sem brightnessctl/xbacklight no PATH.
-# --verbose responde "Brightness: 0.50"; --query devolve um monitor conectado.
-# QS_FAKE_XRANDR_FAIL=1: sai 1 (força fallback).
+# xrandr falso dedicado ao brilho e aos monitores: sem brightnessctl/xbacklight
+# no PATH. --verbose responde "Brightness: 0.50"; --query devolve dois
+# monitores conectados por padrão.
+# Controles por ambiente:
+#   QS_FAKE_XRANDR_FAIL=1        sai 1 com stderr em qualquer argumento
+#   QS_FAKE_XRANDR_QUERY_FAIL=1  --query sai 1 com stderr e sem stdout
+#   QS_FAKE_XRANDR_EMPTY=1       --query só traz a linha Screen, sem monitores
+#   QS_FAKE_XRANDR_SINGLE=1      --query traz HDMI-1 ativo e VGA-1/DVI-1 off
 if [ -n "${QS_FAKE_LOG:-}" ]; then
   printf 'xrandr %s\n' "$*" >> "$QS_FAKE_LOG"
 fi
 if [ -n "${QS_FAKE_XRANDR_FAIL:-}" ]; then
+  printf 'xrandr: failed to set screen size\n' >&2
   exit 1
 fi
 case "$1" in
@@ -17,6 +23,27 @@ case "$1" in
       "   Brightness: 0.50"
     ;;
   --query)
+    if [ -n "${QS_FAKE_XRANDR_QUERY_FAIL:-}" ]; then
+      printf 'xrandr: failed to query outputs\n' >&2
+      exit 1
+    fi
+    if [ -n "${QS_FAKE_XRANDR_EMPTY:-}" ]; then
+      printf '%s\n' \
+        "Screen 0: minimum 8 x 8, current 0 x 0, maximum 32767 x 32767"
+      exit 0
+    fi
+    if [ -n "${QS_FAKE_XRANDR_SINGLE:-}" ]; then
+      printf '%s\n' \
+        "Screen 0: minimum 8 x 8, current 1920 x 1080, maximum 32767 x 32767" \
+        "HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 510mm x 290mm" \
+        "   1920x1080     60.00*+  59.94" \
+        "   1280x720      60.00" \
+        "VGA-1 connected (normal left inverted right x axis y axis)" \
+        "DVI-1 connected (normal left inverted right x axis y axis)" \
+        "   1600x900      60.00" \
+        "   1280x800      60.00"
+      exit 0
+    fi
     printf '%s\n' \
       "Screen 0: minimum 8 x 8, current 1920 x 1080, maximum 32767 x 32767" \
       "HDMI-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 510mm x 290mm" \
