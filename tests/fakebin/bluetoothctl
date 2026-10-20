@@ -1,24 +1,177 @@
 #!/bin/sh
-# Fake bluetoothctl para testes: responde list/show/info/devices/power e loga argv.
+# Fake bluetoothctl para testes: responde list/show/info/devices/power/scan e
+# loga argv. Estados controlaveis por ambiente (todos opcionais):
+#   QS_FAKE_BT_NO_ADAPTER=1     list sem controller
+#   QS_FAKE_BT_POWER=no|yes     show Powered
+#   QS_FAKE_BT_EMPTY=1          devices sem nenhum aparelho
+#   QS_FAKE_BT_DEVICES=texto    lista base de devices (multilinha)
+#   QS_FAKE_BT_PAIRED/TRUSTED/CONNECTED=texto  saída do filtro (vazio omite)
+#   QS_FAKE_BT_INFO_FAIL=1      info com erro do BlueZ
+#   QS_FAKE_BT_INFO_EMPTY=1     info sem saída
+#   QS_FAKE_BT_INFO_PAIRED=no   flag Paired default yes
+#   QS_FAKE_BT_INFO_TRUSTED=yes flag Trusted default no
+#   QS_FAKE_BT_INFO_CONNECTED=no estado inicial sem QS_FAKE_BT_STATE
+#   QS_FAKE_BT_STATE=arquivo    estado Connected persistido entre comandos
+#   QS_FAKE_BT_CONNECT_FAIL=1|2 falha connect em stdout|stderr
+#   QS_FAKE_BT_DISCONNECT_FAIL=1|2 falha disconnect em stdout|stderr
+#   QS_FAKE_BT_KEEP_STATE=1     connect/disconnect nao alteram o estado
 echo "$*" >> "${QS_FAKE_LOG:-/dev/null}"
 if [ "$1" = "--timeout" ]; then shift 2; fi
+state_file="${QS_FAKE_BT_STATE:-}"
+
+connected_now ()
+{
+  if [ -n "$state_file" ] && [ -f "$state_file" ]; then
+    [ "$(cat "$state_file")" = "yes" ]
+    return $?
+  fi
+  [ "${QS_FAKE_BT_INFO_CONNECTED:-yes}" = "yes" ]
+}
+
+set_connected ()
+{
+  if [ -n "$state_file" ] && [ "${QS_FAKE_BT_KEEP_STATE:-0}" != "1" ]; then
+    printf '%s\n' "$1" > "$state_file"
+  fi
+}
+
+filtered ()
+{
+  name="$1"
+  if [ "${QS_FAKE_BT_DEVICES+x}" = "x" ]; then
+    case "$name" in
+      Paired)
+        if [ "${QS_FAKE_BT_PAIRED+x}" = "x" ] && [ -n "$QS_FAKE_BT_PAIRED" ]; then
+          printf '%s\n' "$QS_FAKE_BT_PAIRED"
+        fi
+        ;;
+      Trusted)
+        if [ "${QS_FAKE_BT_TRUSTED+x}" = "x" ] && [ -n "$QS_FAKE_BT_TRUSTED" ]; then
+          printf '%s\n' "$QS_FAKE_BT_TRUSTED"
+        fi
+        ;;
+      Connected)
+        if [ "${QS_FAKE_BT_CONNECTED+x}" = "x" ] && [ -n "$QS_FAKE_BT_CONNECTED" ]; then
+          printf '%s\n' "$QS_FAKE_BT_CONNECTED"
+        fi
+        ;;
+    esac
+    return 0
+  fi
+  case "$name" in
+    Paired)
+      if [ "${QS_FAKE_BT_PAIRED+x}" = "x" ]; then
+        [ -n "$QS_FAKE_BT_PAIRED" ] && printf '%s\n' "$QS_FAKE_BT_PAIRED"
+      else
+        printf 'Device 11:22:33:44:55:66 Keyboard\n'
+      fi
+      ;;
+    Trusted)
+      if [ "${QS_FAKE_BT_TRUSTED+x}" = "x" ]; then
+        [ -n "$QS_FAKE_BT_TRUSTED" ] && printf '%s\n' "$QS_FAKE_BT_TRUSTED"
+      else
+        printf 'Device AA:AA:AA:AA:AA:01 Mouse\n'
+      fi
+      ;;
+    Connected)
+      if [ "${QS_FAKE_BT_CONNECTED+x}" = "x" ]; then
+        [ -n "$QS_FAKE_BT_CONNECTED" ] && printf '%s\n' "$QS_FAKE_BT_CONNECTED"
+      else
+        printf 'Device BB:BB:BB:BB:BB:02 Headset\n'
+      fi
+      ;;
+  esac
+}
+
 case "$1" in
   list)
+    if [ "${QS_FAKE_BT_NO_ADAPTER:-0}" = "1" ]; then
+      exit 0
+    fi
     printf 'Controller AA:BB:CC:DD:EE:FF BlueZ 5\n'
     ;;
   show)
-    printf 'Controller AA:BB:CC:DD:EE:FF\n\tPowered: yes\n\tDiscoverable: no\n'
+    if [ "${QS_FAKE_BT_NO_ADAPTER:-0}" = "1" ]; then
+      printf 'No default controller available\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_POWER:-yes}" = "yes" ]; then
+      printf 'Controller AA:BB:CC:DD:EE:FF\n\tPowered: yes\n\tDiscoverable: no\n'
+    else
+      printf 'Controller AA:BB:CC:DD:EE:FF\n\tPowered: no\n\tDiscoverable: no\n'
+    fi
     ;;
   info)
-    printf 'Device %s\n\tName: FakeBuds\n\tAlias: FakeBuds\n\tPaired: yes\n\tTrusted: no\n\tBlocked: no\n\tConnected: yes\n' "$2"
+    if [ "${QS_FAKE_BT_INFO_FAIL:-0}" = "1" ]; then
+      printf 'Failed to connect: org.bluez.Error.Failed\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_INFO_EMPTY:-0}" = "1" ]; then
+      exit 0
+    fi
+    if connected_now; then
+      conn=yes
+    else
+      conn=no
+    fi
+    printf 'Device %s\n\tName: FakeBuds\n\tAlias: FakeBuds\n\tPaired: %s\n\tTrusted: %s\n\tBlocked: no\n\tConnected: %s\n' \
+      "$2" "${QS_FAKE_BT_INFO_PAIRED:-yes}" \
+      "${QS_FAKE_BT_INFO_TRUSTED:-no}" "$conn"
     ;;
   devices)
-    case "$2" in
-      Paired) printf 'Device 11:22:33:44:55:66 Keyboard\n' ;;
-      Trusted) printf 'Device AA:AA:AA:AA:AA:01 Mouse\n' ;;
-      Connected) printf 'Device BB:BB:BB:BB:BB:02 Headset\n' ;;
-      *) printf 'Device 11:22:33:44:55:66 Keyboard\n' ;;
-    esac
+    if [ "${QS_FAKE_BT_EMPTY:-0}" = "1" ]; then
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_DEVICES+x}" = "x" ]; then
+      case "$2" in
+        Paired|Trusted|Connected) filtered "$2" ;;
+        *)
+          if [ -n "$QS_FAKE_BT_DEVICES" ]; then
+            printf '%s\n' "$QS_FAKE_BT_DEVICES"
+          fi
+          ;;
+      esac
+    else
+      case "$2" in
+        Paired) filtered Paired ;;
+        Trusted) filtered Trusted ;;
+        Connected) filtered Connected ;;
+        *) printf 'Device 11:22:33:44:55:66 Keyboard\n' ;;
+      esac
+    fi
+    ;;
+  scan)
+    printf 'Discovery started\n'
+    ;;
+  connect)
+    if [ "${QS_FAKE_BT_CONNECT_FAIL:-0}" = "1" ]; then
+      printf 'Failed to connect: org.bluez.Error.Failed\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_CONNECT_FAIL:-0}" = "2" ]; then
+      printf '  Failed to connect: org.bluez.Error.Failed\n' >&2
+      exit 0
+    fi
+    set_connected yes
+    printf 'Connection successful\n'
+    ;;
+  disconnect)
+    if [ "${QS_FAKE_BT_DISCONNECT_FAIL:-0}" = "1" ]; then
+      printf 'Failed to disconnect: org.bluez.Error.Failed\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_DISCONNECT_FAIL:-0}" = "2" ]; then
+      printf 'Failed to disconnect: org.bluez.Error.Failed\n' >&2
+      exit 0
+    fi
+    set_connected no
+    printf 'Successful disconnected\n'
+    ;;
+  pair)
+    printf 'Pairing successful\n'
+    ;;
+  trust)
+    printf 'Changing %s trust succeeded\n' "$2"
     ;;
   power)
     exit 0
