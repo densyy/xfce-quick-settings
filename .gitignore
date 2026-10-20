@@ -9,8 +9,10 @@ tests/test-audio-wpctl
 tests/test-bt
 tests/test-brightness
 tests/test-cache
+tests/test-display-nav
 tests/test-lifecycle
 tests/test-monitor-data
+tests/test-net
 tests/test-notify-store
 tests/test-power
 tests/test-sysmon-data
