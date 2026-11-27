@@ -23,16 +23,24 @@ fresh_since (gint64 now, gint64 ts, gint64 ttl)
 }
 
 static gboolean
-read_bool (GKeyFile *kf, const gchar *group, const gchar *key, gboolean *out)
+consume_key_error (GError *err)
 {
-  GError *err = NULL;
-  gboolean v = g_key_file_get_boolean (kf, group, key, &err);
-
   if (err != NULL)
     {
       g_error_free (err);
       return FALSE;
     }
+  return TRUE;
+}
+
+static gboolean
+read_bool (GKeyFile *kf, const gchar *group, const gchar *key, gboolean *out)
+{
+  GError *err = NULL;
+  gboolean v = g_key_file_get_boolean (kf, group, key, &err);
+
+  if (!consume_key_error (err))
+    return FALSE;
   *out = v;
   return TRUE;
 }
@@ -43,11 +51,8 @@ read_int (GKeyFile *kf, const gchar *group, const gchar *key, gint *out)
   GError *err = NULL;
   gint v = g_key_file_get_integer (kf, group, key, &err);
 
-  if (err != NULL)
-    {
-      g_error_free (err);
-      return FALSE;
-    }
+  if (!consume_key_error (err))
+    return FALSE;
   *out = v;
   return TRUE;
 }
@@ -58,13 +63,44 @@ read_ts (GKeyFile *kf, const gchar *group, const gchar *key, gint64 *out)
   GError *err = NULL;
   gint64 v = g_key_file_get_int64 (kf, group, key, &err);
 
-  if (err != NULL)
-    {
-      g_error_free (err);
-      return FALSE;
-    }
+  if (!consume_key_error (err))
+    return FALSE;
   *out = v;
   return TRUE;
+}
+
+static gboolean
+fresh_stamp (GKeyFile    *kf,
+             const gchar *group,
+             const gchar *key,
+             gint64       now,
+             gint64       ttl,
+             gint64      *out)
+{
+  if (!read_ts (kf, group, key, out))
+    return FALSE;
+  return fresh_since (now, *out, ttl);
+}
+
+static void
+apply_switch_state (QuickSettings *qs,
+                    GtkWidget     *sw,
+                    gboolean       on)
+{
+  if (sw == NULL)
+    return;
+  qs->updating = TRUE;
+  gtk_switch_set_active (GTK_SWITCH (sw), on);
+  qs->updating = FALSE;
+}
+
+static void
+paint_stale (GtkWidget   *label,
+             const gchar *text)
+{
+  if (label == NULL)
+    return;
+  gtk_label_set_text (GTK_LABEL (label), text);
 }
 
 static void
@@ -308,20 +344,13 @@ load_wifi_state (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gint64 ts = 0;
 
   if (!read_bool (kf, "wifi", "on", &on)
-      || !read_ts (kf, "wifi", "on_ts", &ts)
-      || !fresh_since (now, ts, QS_CACHE_TTL_SLOW_S))
+      || !fresh_stamp (kf, "wifi", "on_ts", now, QS_CACHE_TTL_SLOW_S, &ts))
     {
-      if (qs->wifi_sub != NULL)
-        gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "…");
+      paint_stale (qs->wifi_sub, "…");
       return;
     }
   qs->wifi_on = on;
-  if (qs->wifi_switch != NULL)
-    {
-      qs->updating = TRUE;
-      gtk_switch_set_active (GTK_SWITCH (qs->wifi_switch), on);
-      qs->updating = FALSE;
-    }
+  apply_switch_state (qs, qs->wifi_switch, on);
   if (qs->wifi_tile != NULL)
     {
       set_tile_active (qs->wifi_tile, on);
@@ -338,8 +367,7 @@ load_wifi_ssid (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gint64 ts = 0;
 
   if (str != NULL && *str != '\0'
-      && read_ts (kf, "wifi", "ssid_ts", &ts)
-      && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
+      && fresh_stamp (kf, "wifi", "ssid_ts", now, QS_CACHE_TTL_FAST_S, &ts)
       && qs->wifi_sub != NULL)
     {
       gtk_label_set_text (GTK_LABEL (qs->wifi_sub), str);
@@ -356,20 +384,14 @@ load_bt_state (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gint64 ts = 0;
 
   if (!read_bool (kf, "bluetooth", "powered", &powered)
-      || !read_ts (kf, "bluetooth", "powered_ts", &ts)
-      || !fresh_since (now, ts, QS_CACHE_TTL_SLOW_S))
+      || !fresh_stamp (kf, "bluetooth", "powered_ts", now,
+                       QS_CACHE_TTL_SLOW_S, &ts))
     {
-      if (qs->bt_sub != NULL)
-        gtk_label_set_text (GTK_LABEL (qs->bt_sub), "…");
+      paint_stale (qs->bt_sub, "…");
       return;
     }
   qs->bt_on = powered;
-  if (qs->bt_switch != NULL)
-    {
-      qs->updating = TRUE;
-      gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), powered);
-      qs->updating = FALSE;
-    }
+  apply_switch_state (qs, qs->bt_switch, powered);
   if (qs->bt_tile != NULL)
     set_tile_active (qs->bt_tile, powered);
   if (qs->bt_sub != NULL)
@@ -384,8 +406,8 @@ load_bt_name (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gboolean connected = FALSE;
 
   if (str != NULL && *str != '\0'
-      && read_ts (kf, "bluetooth", "connected_name_ts", &ts)
-      && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
+      && fresh_stamp (kf, "bluetooth", "connected_name_ts", now,
+                      QS_CACHE_TTL_FAST_S, &ts)
       && qs->bt_sub != NULL)
     {
       g_free (qs->bt_connected_name);
@@ -396,8 +418,8 @@ load_bt_name (QuickSettings *qs, GKeyFile *kf, gint64 now)
     }
   g_free (str);
   if (read_bool (kf, "bluetooth", "connected", &connected)
-      && read_ts (kf, "bluetooth", "connected_ts", &ts)
-      && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
+      && fresh_stamp (kf, "bluetooth", "connected_ts", now,
+                      QS_CACHE_TTL_FAST_S, &ts)
       && connected && qs->bt_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Connected");
 }
@@ -417,8 +439,7 @@ load_audio (QuickSettings *qs, GKeyFile *kf, gint64 now)
       qs->updating = FALSE;
     }
   if (read_bool (kf, "audio", "mute", &mute)
-      && read_ts (kf, "audio", "mute_ts", &ts)
-      && fresh_since (now, ts, QS_CACHE_TTL_FAST_S)
+      && fresh_stamp (kf, "audio", "mute_ts", now, QS_CACHE_TTL_FAST_S, &ts)
       && mute && qs->audio_sub != NULL)
     gtk_label_set_text (GTK_LABEL (qs->audio_sub), "Muted");
 }
@@ -430,8 +451,8 @@ load_display (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gint64 ts = 0;
 
   if (!read_int (kf, "display", "brightness", &brightness)
-      || !read_ts (kf, "display", "brightness_ts", &ts)
-      || !fresh_since (now, ts, QS_CACHE_TTL_SLOW_S)
+      || !fresh_stamp (kf, "display", "brightness_ts", now,
+                       QS_CACHE_TTL_SLOW_S, &ts)
       || qs->bright_scale == NULL)
     return;
   qs->updating = TRUE;
@@ -447,12 +468,11 @@ load_power (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gint64 ts = 0;
 
   if (!read_int (kf, "power", "percent", &percent)
-      || !read_ts (kf, "power", "percent_ts", &ts)
-      || !fresh_since (now, ts, QS_CACHE_TTL_SLOW_S)
+      || !fresh_stamp (kf, "power", "percent_ts", now,
+                       QS_CACHE_TTL_SLOW_S, &ts)
       || qs->bat_label == NULL)
     {
-      if (qs->bat_label != NULL)
-        gtk_label_set_text (GTK_LABEL (qs->bat_label), "—");
+      paint_stale (qs->bat_label, "—");
       return;
     }
   {
@@ -470,12 +490,11 @@ load_notify (QuickSettings *qs, GKeyFile *kf, gint64 now)
   gint64 ts = 0;
 
   if (!read_int (kf, "notify", "count", &count)
-      || !read_ts (kf, "notify", "count_ts", &ts)
-      || !fresh_since (now, ts, QS_CACHE_TTL_SLOW_S)
+      || !fresh_stamp (kf, "notify", "count_ts", now,
+                       QS_CACHE_TTL_SLOW_S, &ts)
       || qs->notify_sub == NULL)
     {
-      if (qs->notify_sub != NULL)
-        gtk_label_set_text (GTK_LABEL (qs->notify_sub), "…");
+      paint_stale (qs->notify_sub, "…");
       return;
     }
   if (count <= 0)

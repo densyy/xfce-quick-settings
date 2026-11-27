@@ -33,6 +33,40 @@ wifi_saved_cache_valid_locked (void)
          < ((gint64) WIFI_SAVED_TTL_SECS * G_USEC_PER_SEC);
 }
 
+static gboolean
+saved_row_is_wireless (gchar **fields)
+{
+  return g_strcmp0 (fields[0], "") != 0
+         && g_strcmp0 (fields[1], "802-11-wireless") == 0;
+}
+
+static void
+insert_saved_row (GHashTable  *fresh,
+                  const gchar *line)
+{
+  gchar **fields;
+
+  if (*line == '\0')
+    return;
+  fields = split_terse_line (line, 2);
+  if (saved_row_is_wireless (fields)
+      && g_hash_table_lookup (fresh, fields[0]) == NULL)
+    g_hash_table_insert (fresh, g_strdup (fields[0]),
+                         GINT_TO_POINTER (1));
+  g_strfreev (fields);
+}
+
+static void
+swap_saved_set (GHashTable *fresh)
+{
+  g_mutex_lock (&wifi_saved_mutex);
+  if (wifi_saved_set != NULL)
+    g_hash_table_destroy (wifi_saved_set);
+  wifi_saved_set = fresh;
+  wifi_saved_mtime = g_get_monotonic_time ();
+  g_mutex_unlock (&wifi_saved_mutex);
+}
+
 /* WORKER ONLY: rebuilds the set; swaps the table under lock. */
 static void
 wifi_saved_refresh_sync (void)
@@ -44,32 +78,17 @@ wifi_saved_refresh_sync (void)
 
   wifi_saved_ensure ();
   fresh = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-  if (output != NULL)
+  if (output == NULL)
     {
-      lines = g_strsplit (output, "\n", -1);
-      for (i = 0; lines[i] != NULL; i++)
-        {
-          gchar **fields;
-
-          if (*lines[i] == '\0')
-            continue;
-          fields = split_terse_line (lines[i], 2);
-          if (g_strcmp0 (fields[0], "") != 0
-              && g_strcmp0 (fields[1], "802-11-wireless") == 0
-              && g_hash_table_lookup (fresh, fields[0]) == NULL)
-            g_hash_table_insert (fresh, g_strdup (fields[0]),
-                                 GINT_TO_POINTER (1));
-          g_strfreev (fields);
-        }
-      g_strfreev (lines);
-      g_free (output);
+      swap_saved_set (fresh);
+      return;
     }
-  g_mutex_lock (&wifi_saved_mutex);
-  if (wifi_saved_set != NULL)
-    g_hash_table_destroy (wifi_saved_set);
-  wifi_saved_set = fresh;
-  wifi_saved_mtime = g_get_monotonic_time ();
-  g_mutex_unlock (&wifi_saved_mutex);
+  lines = g_strsplit (output, "\n", -1);
+  for (i = 0; lines[i] != NULL; i++)
+    insert_saved_row (fresh, lines[i]);
+  g_strfreev (lines);
+  g_free (output);
+  swap_saved_set (fresh);
 }
 
 /* UI-SAFE (no spawn): cached answer only; FALSE when stale/unknown. */

@@ -373,12 +373,10 @@ bt_find_row (QuickSettings *qs,
 }
 
 static gboolean
-bt_update_row (QuickSettings *qs,
-               const gchar   *mac,
-               gboolean       connected,
-               gboolean       paired)
+row_collect_widgets (GtkWidget  *row,
+                     GtkWidget **icon_out,
+                     GtkWidget **state_out)
 {
-  GtkWidget *row = bt_find_row (qs, mac);
   GtkWidget *hbox;
   GList     *kids;
   GList     *k;
@@ -386,8 +384,8 @@ bt_update_row (QuickSettings *qs,
   GtkWidget *state = NULL;
   gint       labels_seen = 0;
 
-  if (row == NULL)
-    return FALSE;
+  *icon_out = NULL;
+  *state_out = NULL;
   hbox = gtk_bin_get_child (GTK_BIN (row));
   if (hbox == NULL || !GTK_IS_BOX (hbox))
     return FALSE;
@@ -403,6 +401,55 @@ bt_update_row (QuickSettings *qs,
             state = GTK_WIDGET (k->data);
         }
     }
+  g_list_free (kids);
+  *icon_out = icon;
+  *state_out = state;
+  return TRUE;
+}
+
+static void
+row_sync_connected_name (QuickSettings *qs,
+                         GtkWidget     *row,
+                         gboolean       connected)
+{
+  const gchar *nm = g_object_get_data (G_OBJECT (row), "qs-name");
+
+  if (connected)
+    {
+      if (nm == NULL)
+        return;
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), nm);
+      g_free (qs->bt_connected_name);
+      qs->bt_connected_name = g_strdup (nm);
+      return;
+    }
+  if (nm != NULL && qs->bt_sub != NULL)
+    {
+      const gchar *sub = gtk_label_get_text (GTK_LABEL (qs->bt_sub));
+
+      if (sub != NULL && g_strcmp0 (nm, sub) == 0)
+        {
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+          g_free (qs->bt_connected_name);
+          qs->bt_connected_name = NULL;
+        }
+    }
+}
+
+static gboolean
+bt_update_row (QuickSettings *qs,
+               const gchar   *mac,
+               gboolean       connected,
+               gboolean       paired)
+{
+  GtkWidget *row = bt_find_row (qs, mac);
+  GtkWidget *icon = NULL;
+  GtkWidget *state = NULL;
+
+  if (row == NULL)
+    return FALSE;
+  if (!row_collect_widgets (row, &icon, &state))
+    return FALSE;
   if (state != NULL)
     gtk_label_set_text (GTK_LABEL (state),
                         connected ? "Connected"
@@ -413,34 +460,12 @@ bt_update_row (QuickSettings *qs,
                                   ? "bluetooth-active-symbolic"
                                   : "bluetooth-symbolic",
                                   GTK_ICON_SIZE_LARGE_TOOLBAR);
-  g_list_free (kids);
   g_object_set_data (G_OBJECT (row), "qs-connected",
                      GINT_TO_POINTER (connected));
   g_object_set_data (G_OBJECT (row), "qs-paired",
                      GINT_TO_POINTER (paired));
-  if (connected)
-    {
-      const gchar *nm = g_object_get_data (G_OBJECT (row), "qs-name");
-
-      if (nm != NULL)
-        {
-          gtk_label_set_text (GTK_LABEL (qs->bt_sub), nm);
-          g_free (qs->bt_connected_name);
-          qs->bt_connected_name = g_strdup (nm);
-        }
-    }
-  else
-    {
-      const gchar *nm = g_object_get_data (G_OBJECT (row), "qs-name");
-      const gchar *sub = gtk_label_get_text (GTK_LABEL (qs->bt_sub));
-
-      if (nm != NULL && sub != NULL && g_strcmp0 (nm, sub) == 0)
-        {
-          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
-          g_free (qs->bt_connected_name);
-          qs->bt_connected_name = NULL;
-        }
-    }
+  if (qs->bt_sub != NULL)
+    row_sync_connected_name (qs, row, connected);
   return TRUE;
 }
 

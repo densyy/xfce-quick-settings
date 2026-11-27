@@ -11,6 +11,22 @@ struct BtSignalWatchPrivate
 };
 
 static void
+unref_pair (GVariant *a,
+            GVariant *b)
+{
+  if (a != NULL)
+    g_variant_unref (a);
+  if (b != NULL)
+    g_variant_unref (b);
+}
+
+static gboolean
+iface_is_bluez_device (const gchar *iface)
+{
+  return g_strcmp0 (iface, "org.bluez.Device1") == 0;
+}
+
+static void
 bt_signal_on_dbus_signal (GDBusConnection *connection,
                            const gchar     *sender_name,
                            const gchar     *object_path,
@@ -34,19 +50,13 @@ bt_signal_on_dbus_signal (GDBusConnection *connection,
   if (parameters == NULL)
     return;
   g_variant_get (parameters, "(&s@a{sv}@as)", &iface, &changed, &invalid);
-  if (g_strcmp0 (iface, "org.bluez.Device1") != 0)
+  if (!iface_is_bluez_device (iface))
     {
-      if (changed != NULL)
-        g_variant_unref (changed);
-      if (invalid != NULL)
-        g_variant_unref (invalid);
+      unref_pair (changed, invalid);
       return;
     }
   watch->cb (object_path, changed, sender_name, watch->user_data);
-  if (changed != NULL)
-    g_variant_unref (changed);
-  if (invalid != NULL)
-    g_variant_unref (invalid);
+  unref_pair (changed, invalid);
 }
 
 BtSignalWatch *

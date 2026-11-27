@@ -44,6 +44,41 @@ wifi_set_enabled (gboolean on)
   g_free (cmd);
 }
 
+static void
+merge_wifi_net (GHashTable *seen,
+                GList     **nets,
+                gchar     **fields)
+{
+  WifiNet  *existing;
+  gint      signal;
+  gboolean  secured;
+  gboolean  active;
+
+  if (!qs_parse_int_checked (fields[2], &signal))
+    signal = 0;
+  secured = !(g_strcmp0 (fields[3], "--") == 0 || *fields[3] == '\0');
+  active = (g_strcmp0 (fields[0], "*") == 0);
+  existing = g_hash_table_lookup (seen, fields[1]);
+  if (existing == NULL)
+    {
+      WifiNet *net = g_new0 (WifiNet, 1);
+
+      net->ssid = g_strdup (fields[1]);
+      net->signal = signal;
+      net->secured = secured;
+      net->active = active;
+      *nets = g_list_prepend (*nets, net);
+      g_hash_table_insert (seen, net->ssid, net);
+      return;
+    }
+  if (signal > existing->signal)
+    {
+      existing->signal = signal;
+      existing->secured = secured;
+    }
+  existing->active = existing->active || active;
+}
+
 /* Parses "IN-USE,SSID,SIGNAL,SECURITY" terse output. Dedupes by SSID (one
  * row per SSID): keeps the strongest signal, marks active if any BSSID
  * is current. prepend+reverse keeps list order without O(n^2) append. */
@@ -61,11 +96,7 @@ parse_wifi_list (const gchar *output)
   lines = g_strsplit (output, "\n", -1);
   for (i = 0; lines[i] != NULL; i++)
     {
-      gchar    **fields;
-      WifiNet   *existing;
-      gint       signal;
-      gboolean   secured;
-      gboolean   active;
+      gchar **fields;
 
       if (*lines[i] == '\0')
         continue;
@@ -75,31 +106,7 @@ parse_wifi_list (const gchar *output)
           g_strfreev (fields);
           continue;
         }
-      if (!qs_parse_int_checked (fields[2], &signal))
-        signal = 0;
-      secured = !(g_strcmp0 (fields[3], "--") == 0 || *fields[3] == '\0');
-      active = (g_strcmp0 (fields[0], "*") == 0);
-      existing = g_hash_table_lookup (seen, fields[1]);
-      if (existing == NULL)
-        {
-          WifiNet *net = g_new0 (WifiNet, 1);
-
-          net->ssid = g_strdup (fields[1]);
-          net->signal = signal;
-          net->secured = secured;
-          net->active = active;
-          nets = g_list_prepend (nets, net);
-          g_hash_table_insert (seen, net->ssid, net);
-        }
-      else
-        {
-          if (signal > existing->signal)
-            {
-              existing->signal = signal;
-              existing->secured = secured;
-            }
-          existing->active = existing->active || active;
-        }
+      merge_wifi_net (seen, &nets, fields);
       g_strfreev (fields);
     }
   g_strfreev (lines);

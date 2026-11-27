@@ -84,6 +84,20 @@ qs_async_finish (QsAsync *a)
   g_free (a);
 }
 
+static gchar *
+dup_bytes_or_empty (GBytes *bytes)
+{
+  gsize        len = 0;
+  const gchar *p = NULL;
+
+  if (bytes == NULL)
+    return g_strdup ("");
+  p = g_bytes_get_data (bytes, &len);
+  if (p == NULL || len == 0)
+    return g_strdup ("");
+  return g_strndup (p, len);
+}
+
 static void
 qs_async_comm_done (GObject      *source,
                     GAsyncResult *result,
@@ -99,19 +113,13 @@ qs_async_comm_done (GObject      *source,
     {
       if (out != NULL)
         {
-          gsize len;
-          const gchar *p = g_bytes_get_data (out, &len);
-
-          a->output = (p != NULL && len > 0) ? g_strndup (p, len)
-                                             : g_strdup ("");
+          g_free (a->output);
+          a->output = dup_bytes_or_empty (out);
         }
       if (err != NULL)
         {
-          gsize len;
-          const gchar *p = g_bytes_get_data (err, &len);
-
-          a->errout = (p != NULL && len > 0) ? g_strndup (p, len)
-                                             : g_strdup ("");
+          g_free (a->errout);
+          a->errout = dup_bytes_or_empty (err);
         }
       a->ok = TRUE;
     }
@@ -218,6 +226,35 @@ run_command_async (const gchar *cmdline,
                              QS_ASYNC_TIMEOUT_SECONDS);
 }
 
+static gboolean
+consume_escape (const gchar **pp,
+                GString      *cur)
+{
+  const gchar *p = *pp;
+
+  if (*p != '\\' || *(p + 1) == '\0')
+    return FALSE;
+  g_string_append_c (cur, *(p + 1));
+  *pp = p + 2;
+  return TRUE;
+}
+
+static gboolean
+is_field_sep (gchar  c,
+              guint  nfields,
+              gint   expected_fields)
+{
+  return c == ':' && nfields < (guint) (expected_fields - 1);
+}
+
+static void
+emit_split_field (GPtrArray **fields,
+                  GString    **cur)
+{
+  g_ptr_array_add (*fields, g_string_free (*cur, FALSE));
+  *cur = g_string_new (NULL);
+}
+
 /* Split an nmcli terse line on unescaped ':' (handles \: and \\). */
 gchar **
 split_terse_line (const gchar *line,
@@ -229,23 +266,16 @@ split_terse_line (const gchar *line,
 
   while (*p != '\0')
     {
-      if (*p == '\\' && *(p + 1) != '\0')
+      if (consume_escape (&p, cur))
+        continue;
+      if (is_field_sep (*p, fields->len, expected_fields))
         {
-          g_string_append_c (cur, *(p + 1));
-          p += 2;
-        }
-      else if (*p == ':' && fields->len < (guint) (expected_fields - 1))
-        {
-          /* Steal the field buffer and start a fresh GString. */
-          g_ptr_array_add (fields, g_string_free (cur, FALSE));
-          cur = g_string_new (NULL);
+          emit_split_field (&fields, &cur);
           p++;
+          continue;
         }
-      else
-        {
-          g_string_append_c (cur, *p);
-          p++;
-        }
+      g_string_append_c (cur, *p);
+      p++;
     }
   g_ptr_array_add (fields, g_strdup (cur->str));
   g_string_free (cur, TRUE);

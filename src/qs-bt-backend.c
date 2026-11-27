@@ -152,6 +152,41 @@ typedef enum
   BT_FLAG_CONNECTED
 } BtFlagKind;
 
+static gboolean
+canon_hex12 (const gchar *s,
+             gchar        out[13])
+{
+  gsize        len = 0;
+  const gchar *p;
+
+  for (p = s; *p != '\0'; p++)
+    {
+      if (*p == '-' || *p == ':')
+        continue;
+      if (len >= 12 || !g_ascii_isxdigit (*p))
+        return FALSE;
+      out[len++] = *p;
+    }
+  if (len != 12)
+    return FALSE;
+  out[12] = '\0';
+  return TRUE;
+}
+
+static gboolean
+name_is_mac_alias (const gchar *name,
+                   const gchar *mac)
+{
+  gchar canon_name[13];
+  gchar canon_mac[13];
+
+  if (!canon_hex12 (name, canon_name))
+    return FALSE;
+  if (!canon_hex12 (mac, canon_mac))
+    return FALSE;
+  return g_ascii_strcasecmp (canon_name, canon_mac) == 0;
+}
+
 /* Parses one `bluetoothctl devices` line. On success stores stripped
  * MAC and name copies in `out_mac`/`out_name` (caller frees both)
  * and returns TRUE. Returns FALSE for lines without a usable name:
@@ -193,51 +228,12 @@ bt_parse_device_line (const gchar  *line,
       g_free (name);
       return FALSE;
     }
-  {
-    gchar canon_name[13];
-    gchar canon_mac[13];
-    gsize name_len = 0;
-    gsize mac_len = 0;
-    gboolean both_hex = TRUE;
-    const gchar *s;
-
-    for (s = name; *s != '\0'; s++)
-      {
-        if (*s == '-' || *s == ':')
-          continue;
-        if (name_len >= 12 || !g_ascii_isxdigit (*s))
-          {
-            both_hex = FALSE;
-            break;
-          }
-        canon_name[name_len++] = *s;
-      }
-    if (both_hex)
-      {
-        for (s = mac; *s != '\0'; s++)
-          {
-            if (*s == '-' || *s == ':')
-              continue;
-            if (mac_len >= 12 || !g_ascii_isxdigit (*s))
-              {
-                both_hex = FALSE;
-                break;
-              }
-            canon_mac[mac_len++] = *s;
-          }
-      }
-    if (both_hex && name_len == 12 && mac_len == 12)
-      {
-        canon_name[12] = '\0';
-        canon_mac[12] = '\0';
-        if (g_ascii_strcasecmp (canon_name, canon_mac) == 0)
-          {
-            g_free (mac);
-            g_free (name);
-            return FALSE;
-          }
-      }
-  }
+  if (name_is_mac_alias (name, mac))
+    {
+      g_free (mac);
+      g_free (name);
+      return FALSE;
+    }
   if (g_ascii_strcasecmp (name, "Unknown") == 0
       || g_ascii_strcasecmp (name, "(unknown)") == 0)
     {
@@ -254,6 +250,38 @@ bt_parse_device_line (const gchar  *line,
   else
     g_free (name);
   return TRUE;
+}
+
+static BtDevice *
+find_device_by_mac (GList *devs, const gchar *mac)
+{
+  GList *l;
+
+  for (l = devs; l != NULL; l = l->next)
+    {
+      BtDevice *candidate = l->data;
+
+      if (g_strcmp0 (candidate->mac, mac) == 0)
+        return candidate;
+    }
+  return NULL;
+}
+
+static void
+apply_device_flag (BtDevice *dev, BtFlagKind flag)
+{
+  switch (flag)
+    {
+    case BT_FLAG_PAIRED:
+      dev->paired = TRUE;
+      break;
+    case BT_FLAG_TRUSTED:
+      dev->trusted = TRUE;
+      break;
+    case BT_FLAG_CONNECTED:
+      dev->connected = TRUE;
+      break;
+    }
 }
 
 /* Applies one filtered listing (`devices Paired|Trusted|Connected`) to `devs`,
@@ -283,24 +311,13 @@ bt_apply_filtered_devices (GList    **devs,
   lines = g_strsplit (output, "\n", -1);
   for (i = 0; lines[i] != NULL; i++)
     {
-      gchar      *mac = NULL;
-      gchar      *name = NULL;
-      BtDevice   *dev = NULL;
-      GList      *l;
+      gchar    *mac = NULL;
+      gchar    *name = NULL;
+      BtDevice *dev;
 
       if (!bt_parse_device_line (lines[i], &mac, &name))
         continue;
-
-      for (l = *devs; l != NULL; l = l->next)
-        {
-          BtDevice *candidate = l->data;
-
-          if (g_strcmp0 (candidate->mac, mac) == 0)
-            {
-              dev = candidate;
-              break;
-            }
-        }
+      dev = find_device_by_mac (*devs, mac);
       if (dev == NULL)
         {
           dev = g_new0 (BtDevice, 1);
@@ -310,19 +327,7 @@ bt_apply_filtered_devices (GList    **devs,
         }
       else if (dev->name == NULL)
         dev->name = g_strdup (name);
-
-      switch (flag)
-        {
-        case BT_FLAG_PAIRED:
-          dev->paired = TRUE;
-          break;
-        case BT_FLAG_TRUSTED:
-          dev->trusted = TRUE;
-          break;
-        case BT_FLAG_CONNECTED:
-          dev->connected = TRUE;
-          break;
-        }
+      apply_device_flag (dev, flag);
       g_free (mac);
       g_free (name);
     }
@@ -370,41 +375,30 @@ list_bt_devices (void)
   return devs;
 }
 
-/* Matches the received object path suffix against the link MAC and
- * extracts Connected from the changed-properties dictionary. The
- * adapter prefix (hci0, hci1, ...) is ignored because only the text
- * after the last slash is compared. Comparison is case-insensitive
- * and colons in the MAC compare equal to underscores in the path. */
-BtSignalMatch
-bt_signal_event_matches (const gchar *object_path,
-                         const gchar *mac,
-                         GVariant    *changed)
+static gboolean
+path_suffix_is_device (const gchar  *object_path,
+                       const gchar  *mac,
+                       gchar       **norm_out)
 {
   const gchar *base;
   const gchar *dev;
-  gchar       *norm = NULL;
+  gchar       *norm;
   gchar       *p;
-  GVariant    *val = NULL;
-  GVariant    *inner = NULL;
-  gboolean     connected = FALSE;
-  gboolean     have = FALSE;
 
-  if (object_path == NULL || mac == NULL || changed == NULL)
-    return BT_SIGNAL_NO_MATCH;
-  if (*mac == '\0' || *object_path == '\0')
-    return BT_SIGNAL_NO_MATCH;
-  if (!g_variant_is_of_type (changed, G_VARIANT_TYPE_VARDICT))
-    return BT_SIGNAL_NO_MATCH;
+  if (object_path == NULL || mac == NULL || norm_out == NULL)
+    return FALSE;
+  if (*object_path == '\0' || *mac == '\0')
+    return FALSE;
   base = strrchr (object_path, '/');
   if (base != NULL)
     base++;
   else
     base = object_path;
   if (g_ascii_strncasecmp (base, "dev_", 4) != 0)
-    return BT_SIGNAL_NO_MATCH;
+    return FALSE;
   dev = base + 4;
   if (*dev == '\0')
-    return BT_SIGNAL_NO_MATCH;
+    return FALSE;
   norm = g_strdup (mac);
   for (p = norm; *p != '\0'; p++)
     {
@@ -414,12 +408,23 @@ bt_signal_event_matches (const gchar *object_path,
   if (g_ascii_strcasecmp (dev, norm) != 0)
     {
       g_free (norm);
-      return BT_SIGNAL_NO_MATCH;
+      return FALSE;
     }
-  g_free (norm);
-  val = g_variant_lookup_value (changed, "Connected", NULL);
+  *norm_out = norm;
+  return TRUE;
+}
+
+static gboolean
+connected_from_changed (GVariant *changed,
+                        gboolean *connected_out)
+{
+  GVariant *val = g_variant_lookup_value (changed, "Connected", NULL);
+  GVariant *inner = NULL;
+  gboolean  connected = FALSE;
+  gboolean  have = FALSE;
+
   if (val == NULL)
-    return BT_SIGNAL_NO_MATCH;
+    return FALSE;
   if (g_variant_is_of_type (val, G_VARIANT_TYPE_VARIANT))
     {
       inner = g_variant_get_variant (val);
@@ -437,6 +442,34 @@ bt_signal_event_matches (const gchar *object_path,
     }
   g_variant_unref (val);
   if (!have)
+    return FALSE;
+  *connected_out = connected;
+  return TRUE;
+}
+
+/* Matches the received object path suffix against the link MAC and
+ * extracts Connected from the changed-properties dictionary. The
+ * adapter prefix (hci0, hci1, ...) is ignored because only the text
+ * after the last slash is compared. Comparison is case-insensitive
+ * and colons in the MAC compare equal to underscores in the path. */
+BtSignalMatch
+bt_signal_event_matches (const gchar *object_path,
+                         const gchar *mac,
+                         GVariant    *changed)
+{
+  gchar    *norm = NULL;
+  gboolean  connected = FALSE;
+
+  if (object_path == NULL || mac == NULL || changed == NULL)
+    return BT_SIGNAL_NO_MATCH;
+  if (*mac == '\0' || *object_path == '\0')
+    return BT_SIGNAL_NO_MATCH;
+  if (!g_variant_is_of_type (changed, G_VARIANT_TYPE_VARDICT))
+    return BT_SIGNAL_NO_MATCH;
+  if (!path_suffix_is_device (object_path, mac, &norm))
+    return BT_SIGNAL_NO_MATCH;
+  g_free (norm);
+  if (!connected_from_changed (changed, &connected))
     return BT_SIGNAL_NO_MATCH;
   if (connected)
     return BT_SIGNAL_CONNECTED_TRUE;

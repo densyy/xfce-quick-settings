@@ -53,6 +53,32 @@ static const gchar qs_bt_agent_xml[] =
 
 static GDBusNodeInfo *qs_bt_agent_node_info = NULL;
 
+static gboolean
+bt_mac_char_valid (gsize i,
+                   gchar c)
+{
+  if ((i % 3) == 2)
+    return c == ':';
+  return g_ascii_isxdigit (c) != 0;
+}
+
+static gchar
+bt_mac_clean_char (gsize i,
+                   gchar c)
+{
+  if ((i % 3) == 2)
+    return '_';
+  return g_ascii_toupper (c);
+}
+
+static const gchar *
+path_basename (const gchar *path)
+{
+  const gchar *base = strrchr (path, '/');
+
+  return (base != NULL) ? base + 1 : path;
+}
+
 gchar *
 qs_bt_agent_device_path_for_mac (const gchar *mac)
 {
@@ -66,18 +92,9 @@ qs_bt_agent_device_path_for_mac (const gchar *mac)
     return NULL;
   for (i = 0; i < 17; i++)
     {
-      if ((i % 3) == 2)
-        {
-          if (mac[i] != ':')
-            return NULL;
-          clean[pos++] = '_';
-        }
-      else
-        {
-          if (!g_ascii_isxdigit (mac[i]))
-            return NULL;
-          clean[pos++] = g_ascii_toupper (mac[i]);
-        }
+      if (!bt_mac_char_valid (i, mac[i]))
+        return NULL;
+      clean[pos++] = bt_mac_clean_char (i, mac[i]);
     }
   clean[pos] = '\0';
   return g_strconcat ("/org/bluez/hci0/dev_", clean, NULL);
@@ -94,16 +111,8 @@ qs_bt_agent_path_matches (const gchar *target_path,
     return FALSE;
   if (request_path == NULL || *request_path == '\0')
     return FALSE;
-  want = strrchr (target_path, '/');
-  if (want != NULL)
-    want++;
-  else
-    want = target_path;
-  base = strrchr (request_path, '/');
-  if (base != NULL)
-    base++;
-  else
-    base = request_path;
+  want = path_basename (target_path);
+  base = path_basename (request_path);
   if (g_ascii_strncasecmp (base, "dev_", 4) != 0)
     return FALSE;
   if (g_ascii_strncasecmp (want, "dev_", 4) != 0)
@@ -210,6 +219,77 @@ qs_bt_agent_handle_confirm (QsBtAgent               *agent,
 }
 
 static void
+qs_bt_agent_handle_pincode (QsBtAgent               *agent,
+                            GVariant                *parameters,
+                            GDBusMethodInvocation   *invocation)
+{
+  const gchar *device = NULL;
+  gchar       *pin;
+
+  g_variant_get (parameters, "(&o)", &device);
+  if (!qs_bt_agent_is_target (agent, device))
+    {
+      qs_bt_agent_reject (invocation, "RequestPinCode: not the pairing target");
+      return;
+    }
+  pin = qs_bt_agent_ask_pin (agent, NULL);
+  if (pin == NULL)
+    {
+      qs_bt_agent_reject (invocation, "RequestPinCode: cancelled");
+      return;
+    }
+  g_dbus_method_invocation_return_value (invocation,
+                                         g_variant_new ("(s)", pin));
+  g_free (pin);
+}
+
+static void
+qs_bt_agent_handle_passkey (QsBtAgent               *agent,
+                             GVariant                *parameters,
+                             GDBusMethodInvocation   *invocation)
+{
+  const gchar *device = NULL;
+  gchar       *pin;
+  gchar       *end = NULL;
+  gulong       value;
+
+  g_variant_get (parameters, "(&o)", &device);
+  if (!qs_bt_agent_is_target (agent, device))
+    {
+      qs_bt_agent_reject (invocation, "RequestPasskey: not the pairing target");
+      return;
+    }
+  pin = qs_bt_agent_ask_pin (agent, NULL);
+  if (pin == NULL)
+    {
+      qs_bt_agent_reject (invocation, "RequestPasskey: cancelled");
+      return;
+    }
+  value = g_ascii_strtoull (pin, &end, 10);
+  g_free (pin);
+  if (end == NULL || *end != '\0' || value > G_MAXUINT32)
+    {
+      qs_bt_agent_reject (invocation, "RequestPasskey: invalid passkey");
+      return;
+    }
+  g_dbus_method_invocation_return_value (invocation,
+                                         g_variant_new ("(u)", (guint32) value));
+}
+
+static void
+qs_bt_agent_handle_confirm_variant (QsBtAgent               *agent,
+                                    GVariant                *parameters,
+                                    GDBusMethodInvocation   *invocation,
+                                    const gchar             *method_name,
+                                    const gchar             *format)
+{
+  const gchar *device = NULL;
+
+  g_variant_get (parameters, format, &device, NULL);
+  qs_bt_agent_handle_confirm (agent, device, invocation, method_name);
+}
+
+static void
 qs_bt_agent_method_call (GDBusConnection       *connection,
                          const gchar           *sender,
                          const gchar           *object_path,
@@ -234,78 +314,30 @@ qs_bt_agent_method_call (GDBusConnection       *connection,
     }
   if (g_strcmp0 (method_name, "RequestPinCode") == 0)
     {
-      const gchar *device = NULL;
-      gchar       *pin;
-
-      g_variant_get (parameters, "(&o)", &device);
-      if (!qs_bt_agent_is_target (agent, device))
-        {
-          qs_bt_agent_reject (invocation, "RequestPinCode: not the pairing target");
-          return;
-        }
-      pin = qs_bt_agent_ask_pin (agent, NULL);
-      if (pin == NULL)
-        {
-          qs_bt_agent_reject (invocation, "RequestPinCode: cancelled");
-          return;
-        }
-      g_dbus_method_invocation_return_value (invocation,
-                                             g_variant_new ("(s)", pin));
-      g_free (pin);
+      qs_bt_agent_handle_pincode (agent, parameters, invocation);
       return;
     }
   if (g_strcmp0 (method_name, "RequestPasskey") == 0)
     {
-      const gchar *device = NULL;
-      gchar       *pin;
-      gchar       *end = NULL;
-      gulong       value;
-
-      g_variant_get (parameters, "(&o)", &device);
-      if (!qs_bt_agent_is_target (agent, device))
-        {
-          qs_bt_agent_reject (invocation, "RequestPasskey: not the pairing target");
-          return;
-        }
-      pin = qs_bt_agent_ask_pin (agent, NULL);
-      if (pin == NULL)
-        {
-          qs_bt_agent_reject (invocation, "RequestPasskey: cancelled");
-          return;
-        }
-      value = g_ascii_strtoull (pin, &end, 10);
-      g_free (pin);
-      if (end == NULL || *end != '\0' || value > G_MAXUINT32)
-        {
-          qs_bt_agent_reject (invocation, "RequestPasskey: invalid passkey");
-          return;
-        }
-      g_dbus_method_invocation_return_value (invocation,
-                                             g_variant_new ("(u)", (guint32) value));
+      qs_bt_agent_handle_passkey (agent, parameters, invocation);
       return;
     }
   if (g_strcmp0 (method_name, "RequestConfirmation") == 0)
     {
-      const gchar *device = NULL;
-
-      g_variant_get (parameters, "(&ou)", &device, NULL);
-      qs_bt_agent_handle_confirm (agent, device, invocation, method_name);
+      qs_bt_agent_handle_confirm_variant (agent, parameters, invocation,
+                                          method_name, "(&ou)");
       return;
     }
   if (g_strcmp0 (method_name, "RequestAuthorization") == 0)
     {
-      const gchar *device = NULL;
-
-      g_variant_get (parameters, "(&o)", &device);
-      qs_bt_agent_handle_confirm (agent, device, invocation, method_name);
+      qs_bt_agent_handle_confirm_variant (agent, parameters, invocation,
+                                          method_name, "(&o)");
       return;
     }
   if (g_strcmp0 (method_name, "AuthorizeService") == 0)
     {
-      const gchar *device = NULL;
-
-      g_variant_get (parameters, "(&o&s)", &device, NULL);
-      qs_bt_agent_handle_confirm (agent, device, invocation, method_name);
+      qs_bt_agent_handle_confirm_variant (agent, parameters, invocation,
+                                          method_name, "(&o&s)");
       return;
     }
   g_dbus_method_invocation_return_value (invocation, g_variant_new ("()"));
