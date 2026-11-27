@@ -1345,6 +1345,40 @@ test_link_verify_dead (void)
 }
 
 static void
+test_hide_nameless_devices (void)
+{
+  QuickSettings *qs;
+  GtkWidget     *stack;
+  GtkWidget     *row;
+  gchar         *log;
+
+  if (skip_no_display ())
+    return;
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+
+  g_setenv ("QS_FAKE_BT_DEVICES",
+            "Device AA:BB:CC:DD:EE:11\n"
+            "Device AA:BB:CC:DD:EE:12 AA:BB:CC:DD:EE:12\n"
+            "Device 11:22:33:44:55:66 Buds",
+            TRUE);
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  g_assert_cmpuint (bt_row_count (qs), ==, 1);
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:11"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:12"));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+
+  free_fixture (qs, stack, log);
+}
+
+static void
 test_teardown_idempotent (void)
 {
   QuickSettings *qs;
@@ -1411,6 +1445,7 @@ main (int argc, char **argv)
   g_test_add_func ("/bt-flow/link_row_fallback", test_link_row_missing_fallback);
   g_test_add_func ("/bt-flow/link_verify_retry", test_link_verify_retry_failure);
   g_test_add_func ("/bt-flow/link_verify_dead", test_link_verify_dead);
+  g_test_add_func ("/bt-flow/hide_nameless", test_hide_nameless_devices);
   g_test_add_func ("/bt-flow/teardown", test_teardown_idempotent);
 
   return g_test_run ();

@@ -192,8 +192,14 @@ bt_apply_filtered_devices (GList    **devs,
           g_strfreev (parts);
           continue;
         }
+      if (parts[2] == NULL || *parts[2] == '\0'
+          || g_strcmp0 (parts[2], parts[1]) == 0)
+        {
+          g_strfreev (parts);
+          continue;
+        }
       mac = parts[1];
-      name = (parts[2] != NULL && *parts[2] != '\0') ? parts[2] : parts[1];
+      name = parts[2];
 
       for (l = *devs; l != NULL; l = l->next)
         {
@@ -259,10 +265,15 @@ list_bt_devices (void)
               g_strfreev (parts);
               continue;
             }
+          if (parts[2] == NULL || *parts[2] == '\0'
+              || g_strcmp0 (parts[2], parts[1]) == 0)
+            {
+              g_strfreev (parts);
+              continue;
+            }
           dev = g_new0 (BtDevice, 1);
           dev->mac = g_strdup (parts[1]);
-          dev->name = g_strdup (parts[2] != NULL && *parts[2] != '\0'
-                                ? parts[2] : parts[1]);
+          dev->name = g_strdup (parts[2]);
           devs = g_list_append (devs, dev);
           g_strfreev (parts);
         }
