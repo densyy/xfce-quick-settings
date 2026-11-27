@@ -5,7 +5,8 @@
 static const gchar *skip_fs[] = {
   "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "securityfs",
   "cgroup", "cgroup2", "pstore", "debugfs", "tracefs", "configfs",
-  "fusectl", "mqueue", "hugetlbfs", "nsfs", "overlay", "squashfs", NULL
+  "fusectl", "mqueue", "hugetlbfs", "nsfs", "overlay", "squashfs",
+  "efivarfs", "autofs", "bpf", "binfmt_misc", NULL
 };
 
 /* Remote filesystems are skipped before any statvfs. */
@@ -263,6 +264,11 @@ swaps_fold_line (const gchar *line,
       g_strfreev (fields);
       return;
     }
+  if (g_str_has_prefix (tokens[0], "/dev/zram"))
+    {
+      g_strfreev (fields);
+      return;
+    }
   size_kb = g_ascii_strtoull (tokens[2], NULL, 10);
   used = g_ascii_strtoull (tokens[3], NULL, 10);
   g_strfreev (fields);
@@ -343,6 +349,13 @@ disks_fold_line (GHashTable *seen,
   g_hash_table_add (seen, g_strdup (device));
   /* f_bfree, not f_bavail: reserved root blocks would inflate usage. */
   total = (guint64) st.f_blocks * st.f_frsize;
+  if (total < 1073741824)
+    {
+      g_free (device);
+      g_free (target);
+      g_strfreev (parts);
+      return;
+    }
   used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
   base = device;
   if (g_str_has_prefix (device, "/dev/"))
