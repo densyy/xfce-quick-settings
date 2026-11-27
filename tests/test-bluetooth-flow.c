@@ -1345,6 +1345,76 @@ test_link_verify_dead (void)
 }
 
 static void
+test_link_verify_fast_refresh (void)
+{
+  QuickSettings *qs;
+  GtkWidget     *stack;
+  GtkWidget     *row;
+  gchar         *log;
+  gchar         *state;
+  gint64         flipped_us;
+  gint64         done_us;
+  guint          latency_ms;
+  guint          waited = 0;
+
+  if (skip_no_display ())
+    return;
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+  state = g_build_filename (tmp_root, "bt-state-fast", NULL);
+  create_state_file (state, "no");
+  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
+  g_setenv ("QS_FAKE_BT_KEEP_STATE", "1", TRUE);
+  enable_connect_success ();
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+  g_assert_false (row_connected (row));
+
+  /* O BlueZ só vira Connected=yes DEPOIS que o `connect` retornou: o
+   * verify precisa re-ler `info` até ver o estado novo. O estado vira
+   * `yes` logo após o verify fazer a primeira releitura (2º `info` no
+   * log, o 1º é o do toggle), então a latência medida é puro intervalo
+   * de poll: ~250 ms na cadência nova, ~800 ms na antiga. A virada
+   * espera 150 ms para não ganhar do `info` em voo (que leria o estado
+   * novo no mesmo poll em qualquer cadência e esconderia a regressão). */
+  g_signal_emit_by_name (qs->bt_list, "row-activated", row);
+  g_assert_true (wait_log_struct (log, "info 11:22:33:44:55:66", 3000));
+  while (waited < 5000
+         && log_count (log, "info 11:22:33:44:55:66") < 2)
+    {
+      run_loop_ms (20);
+      waited += 20;
+    }
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 2);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Verifying…");
+  /* Dá tempo do `info` em voo ler o estado velho antes da virada. */
+  run_loop_ms (150);
+  g_file_set_contents (state, "yes\n", -1, NULL);
+  flipped_us = g_get_monotonic_time ();
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 8000));
+  done_us = g_get_monotonic_time ();
+  latency_ms = (guint) ((done_us - flipped_us) / 1000);
+  /* Cadência nova: próximo poll em ~250 ms; antiga: ~800 ms. */
+  g_assert_cmpuint (latency_ms, <, 450);
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 3);
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+  g_assert_true (row_connected (row));
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "Buds");
+
+  g_free (state);
+  free_fixture (qs, stack, log);
+}
+
+static void
 test_hide_nameless_devices (void)
 {
   QuickSettings *qs;
@@ -1445,6 +1515,8 @@ main (int argc, char **argv)
   g_test_add_func ("/bt-flow/link_row_fallback", test_link_row_missing_fallback);
   g_test_add_func ("/bt-flow/link_verify_retry", test_link_verify_retry_failure);
   g_test_add_func ("/bt-flow/link_verify_dead", test_link_verify_dead);
+  g_test_add_func ("/bt-flow/link_verify_fast_refresh",
+                   test_link_verify_fast_refresh);
   g_test_add_func ("/bt-flow/hide_nameless", test_hide_nameless_devices);
   g_test_add_func ("/bt-flow/teardown", test_teardown_idempotent);
 

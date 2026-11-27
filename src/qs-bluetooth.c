@@ -593,19 +593,22 @@ bt_link_untrack (BtLink *l)
 
 /* Verify stage: `disconnect`/`connect` return before BlueZ flips the
  * Connected flag, so a single `info` read right after the verb often
- * still shows the old state. Retrying the `info` read a few times on
- * the main loop closes that race; without it the row keeps the stale
+ * still shows the old state. The `info` read is re-tried on the main
+ * loop with a short delay (250 ms: feels instant, still far above the
+ * ~10 ms cost of one `info` poll, so no busy-loop); the try count keeps
+ * the same total coverage as before (about 5.7 s on success, 2.5 s
+ * after a failed verb). Without this retry, the row keeps the stale
  * "Connected" label until the next manual Scan. */
-#define BT_VERIFY_MAX_TRIES 8
-#define BT_VERIFY_DELAY_MS 800
+#define BT_VERIFY_MAX_TRIES 24
+#define BT_VERIFY_DELAY_MS 250
 
 /* Same idea, but after a verb that FAILED (or was cut short by our own
  * watchdog): BlueZ may still be working in the background, so the real
  * state is checked a few times before declaring failure. This is what
  * turns "the command was cut short but the device did connect" from a
  * false error into the proper success message. */
-#define BT_VERIFY_AFTER_FAIL_TRIES 6
-#define BT_VERIFY_AFTER_FAIL_DELAY_MS 500
+#define BT_VERIFY_AFTER_FAIL_TRIES 11
+#define BT_VERIFY_AFTER_FAIL_DELAY_MS 250
 
 /* `bluetoothctl connect` blocks for the whole BlueZ page timeout (10 s
  * and counting) — a device that is slow to wake up is still connecting
