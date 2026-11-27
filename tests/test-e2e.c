@@ -644,7 +644,7 @@ g_assert_true (wait_for_combo_id (GTK_COMBO_BOX (qs->mon_combo), "HDMI-1", 10000
       gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (qs->scale_combo), "1.5", "1.5");
       g_assert_true (gtk_combo_box_set_active_id (GTK_COMBO_BOX (qs->scale_combo), "1.5"));
     }
-  g_assert_true (wait_for_log (log, "--scale 1.5x1.5", 10000));
+  g_assert_true (wait_for_log (log, "--scale 0.667x0.667", 10000));
 
   g_free (log);
   g_free (dir);

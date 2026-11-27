@@ -50,7 +50,7 @@ test_bytes_text (void)
 {
   gchar *t = sysmon_bytes_text (1073741824ULL, 2147483648ULL);
 
-  g_assert_cmpstr (t, ==, "1.00 / 2.00 GB");
+  g_assert_cmpstr (t, ==, "1.00 GB / 2.00 GB");
   g_free (t);
 }
 

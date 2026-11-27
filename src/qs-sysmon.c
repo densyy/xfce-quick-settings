@@ -259,11 +259,11 @@ sysmon_refresh (QuickSettings *qs)
         }
     }
 
-  /* Disks: statvfs (bloqueante, pula rede) só quando /proc/mounts mudou
-   * (hash mounts_key vs disk_key reaproveitado). Montagens iguais =>
+  /* Disks + swap: statvfs (bloqueante, pula rede) só quando mounts_key mudou
+   * (mounts + swaps vs disk_key reaproveitado). Montagens iguais =>
    * mantém barras atuais, sem statvfs na UI. RAM/CPU sempre atualizam
    * (só /proc, barato). Tradeoff: uso de disco congela até (re)montar;
-   * evita stalls em FS remoto/stale a cada tick de 10s. */
+   * swap atualiza via assinatura em mounts_key. Evita stalls em FS remoto. */
   {
     gchar *mounts_key = sysmon_mounts_key ();
 

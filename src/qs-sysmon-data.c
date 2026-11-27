@@ -54,6 +54,28 @@ fs_skipped (const gchar *fstype,
   return FALSE;
 }
 
+/* Seam de teste: override de caminho via env, default /proc.
+ * QS_SYSMON_MOUNTS e QS_SYSMON_SWAPS permitem fixtures sem root. */
+static const gchar *
+sysmon_mounts_path (void)
+{
+  const gchar *p = g_getenv ("QS_SYSMON_MOUNTS");
+
+  if (p != NULL && p[0] != '\0')
+    return p;
+  return "/proc/mounts";
+}
+
+static const gchar *
+sysmon_swaps_path (void)
+{
+  const gchar *p = g_getenv ("QS_SYSMON_SWAPS");
+
+  if (p != NULL && p[0] != '\0')
+    return p;
+  return "/proc/swaps";
+}
+
 /* DATA (sem widgets): read_memory/read_cpu/read_disks + helpers puros.
  * Nenhum GTK aqui. */
 
@@ -155,12 +177,24 @@ sysmon_read_cpu (QuickSettings *qs)
   return CLAMP (percent, 0.0, 100.0);
 }
 
+static gchar *
+sysmon_size_text (guint64 bytes)
+{
+  if (bytes < 1073741824)
+    return g_strdup_printf ("%.0f MB", (gdouble) bytes / 1048576.0);
+  return g_strdup_printf ("%.2f GB", (gdouble) bytes / 1073741824.0);
+}
+
 gchar *
 sysmon_bytes_text (guint64 bytes,
                    guint64 total)
 {
-  return g_strdup_printf ("%.2f / %.2f GB",
-                          (gdouble) bytes / 1073741824.0, (gdouble) total / 1073741824.0);
+  gchar *used = sysmon_size_text (bytes);
+  gchar *whole = sysmon_size_text (total);
+  gchar *out = g_strdup_printf ("%s / %s", used, whole);
+  g_free (used);
+  g_free (whole);
+  return out;
 }
 
 /* /proc/mounts escapes space/tab/newline/backslash as octal. */
@@ -218,6 +252,73 @@ sysmon_free_disks (GPtrArray *disks)
 
 /* One entry per device: the same partition often appears under several
  * mount points (bind mounts, btrfs subvolumes). Caller frees the list
+ * with sysmon_free_disks. Swap agrega /proc/swaps em uma linha "swap". */
+GPtrArray *
+sysmon_read_swaps (void)
+{
+  GPtrArray *swaps = g_ptr_array_new_with_free_func (disk_elem_free);
+  gchar *content = NULL;
+  gchar **lines;
+  gint i;
+  guint64 total_kb = 0;
+  guint64 used_kb = 0;
+
+  if (!g_file_get_contents (sysmon_swaps_path (), &content, NULL, NULL))
+    return swaps;
+  lines = g_strsplit (content, "\n", -1);
+  g_free (content);
+  for (i = 0; lines[i] != NULL; i++)
+    {
+      gchar **fields;
+      gchar *tokens[8];
+      gint ntok = 0;
+      gint k;
+      guint64 size_kb;
+      guint64 used;
+
+      if (lines[i][0] == '\0')
+        continue;
+      if (g_str_has_prefix (lines[i], "Filename"))
+        continue;
+      fields = g_strsplit_set (lines[i], " \t", -1);
+      for (k = 0; fields[k] != NULL && ntok < 8; k++)
+        {
+          if (fields[k][0] == '\0')
+            continue;
+          tokens[ntok++] = fields[k];
+        }
+      if (ntok < 4)
+        {
+          g_strfreev (fields);
+          continue;
+        }
+      size_kb = g_ascii_strtoull (tokens[2], NULL, 10);
+      used = g_ascii_strtoull (tokens[3], NULL, 10);
+      g_strfreev (fields);
+      if (size_kb == 0)
+        continue;
+      if (used > size_kb)
+        used = size_kb;
+      total_kb += size_kb;
+      used_kb += used;
+    }
+  g_strfreev (lines);
+  if (total_kb > 0)
+    {
+      SysmonDisk *disk = g_new (SysmonDisk, 1);
+      guint64 total = total_kb * 1024;
+      guint64 used = used_kb * 1024;
+
+      disk->name = g_strdup ("swap");
+      disk->text = sysmon_bytes_text (used, total);
+      disk->fraction = (total == 0) ? 0.0 : (gdouble) used / (gdouble) total;
+      g_ptr_array_add (swaps, disk);
+    }
+  return swaps;
+}
+
+/* One entry per device: the same partition often appears under several
+ * mount points (bind mounts, btrfs subvolumes). Caller frees the list
  * with sysmon_free_disks. */
 GPtrArray *
 sysmon_read_disks (void)
@@ -227,7 +328,7 @@ sysmon_read_disks (void)
   gchar    **lines;
   gint        i;
 
-  if (!g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
+  if (!g_file_get_contents (sysmon_mounts_path (), &content, NULL, NULL))
     return disks;
   {
     GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal,
@@ -265,6 +366,8 @@ sysmon_read_disks (void)
             continue;
           }
         g_hash_table_add (seen, g_strdup (device));
+        /* Usa f_bfree (nao f_bavail): f_bfree mede blocos fisicamente livres;
+         * f_bavail esconde blocos reservados ao root e inflaria o uso visivel. */
         total = (guint64) st.f_blocks * st.f_frsize;
         used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
         base = device;
@@ -283,12 +386,22 @@ sysmon_read_disks (void)
     g_strfreev (lines);
     g_hash_table_destroy (seen);
   }
+  {
+    GPtrArray *swaps = sysmon_read_swaps ();
+    guint j;
+
+    for (j = 0; j < swaps->len; j++)
+      g_ptr_array_add (disks, g_ptr_array_index (swaps, j));
+    g_ptr_array_set_free_func (swaps, NULL);
+    g_ptr_array_free (swaps, TRUE);
+  }
   return disks;
 }
 
 /* Chave "nome|" dos devices em /proc/mounts SEM statvfs (só parse,
- * barato e sem travar em FS remoto). Hash de montagens: quando igual ao
- * qs->sysmon_disk_key, pula statvfs por disco na UI. */
+ * barato e sem travar em FS remoto) mais assinatura de /proc/swaps.
+ * Hash de montagens: quando igual ao qs->sysmon_disk_key, pula statvfs
+ * por disco na UI. Inclui swaps para a linha swap nao congelar. */
 gchar *
 sysmon_mounts_key (void)
 {
@@ -298,7 +411,7 @@ sysmon_mounts_key (void)
   gchar     **lines;
   gint        i;
 
-  if (!g_file_get_contents ("/proc/mounts", &content, NULL, NULL))
+  if (!g_file_get_contents (sysmon_mounts_path (), &content, NULL, NULL))
     return NULL;
   key = g_string_new (NULL);
   seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
@@ -334,5 +447,29 @@ sysmon_mounts_key (void)
     }
   g_strfreev (lines);
   g_hash_table_destroy (seen);
+  {
+    gchar *swap_content = NULL;
+    gchar **swap_lines;
+    gint k;
+
+    if (g_file_get_contents (sysmon_swaps_path (), &swap_content, NULL, NULL))
+      {
+        swap_lines = g_strsplit (swap_content, "\n", -1);
+        g_free (swap_content);
+        for (k = 0; swap_lines[k] != NULL; k++)
+          {
+            gchar *s = g_strstrip (swap_lines[k]);
+
+            if (s[0] == '\0')
+              continue;
+            if (g_str_has_prefix (s, "Filename"))
+              continue;
+            g_string_append (key, "swap:");
+            g_string_append (key, s);
+            g_string_append_c (key, '|');
+          }
+        g_strfreev (swap_lines);
+      }
+  }
   return g_string_free (key, FALSE);
 }

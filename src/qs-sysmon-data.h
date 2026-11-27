@@ -10,6 +10,7 @@ gboolean sysmon_read_memory (guint64 *total_kb,
                              guint64 *avail_kb);
 gdouble sysmon_read_cpu (QuickSettings *qs);
 GPtrArray *sysmon_read_disks (void);
+GPtrArray *sysmon_read_swaps (void);
 void sysmon_free_disks (GPtrArray *disks);
 gchar *sysmon_bytes_text (guint64 bytes,
                           guint64 total);
