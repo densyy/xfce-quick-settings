@@ -1,6 +1,7 @@
 /* Testes do grupo 4: qs-bt-backend (helpers puros + fake bluetoothctl via PATH). */
 #include <string.h>
 
+#include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 
@@ -202,6 +203,210 @@ test_set_powered (void)
   pop_path ();
 }
 
+static GVariant *
+make_connected_dict (gboolean connected)
+{
+  GVariantBuilder builder;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add (&builder, "{sv}", "Connected",
+                         g_variant_new_boolean (connected));
+  return g_variant_builder_end (&builder);
+}
+
+static GVariant *
+make_empty_dict (void)
+{
+  GVariantBuilder builder;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+  return g_variant_builder_end (&builder);
+}
+
+static GVariant *
+make_string_dict (void)
+{
+  GVariantBuilder builder;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add (&builder, "{sv}", "Connected",
+                         g_variant_new_string ("yes"));
+  return g_variant_builder_end (&builder);
+}
+
+static void
+test_signal_exact_true (void)
+{
+  GVariant *dict = make_connected_dict (TRUE);
+  BtSignalMatch m = bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66",
+    "11:22:33:44:55:66", dict);
+
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_TRUE);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_exact_false (void)
+{
+  GVariant *dict = make_connected_dict (FALSE);
+  BtSignalMatch m = bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66",
+    "11:22:33:44:55:66", dict);
+
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_FALSE);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_case_insensitive (void)
+{
+  GVariant *dict = make_connected_dict (TRUE);
+  BtSignalMatch m = bt_signal_event_matches (
+    "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+    "aa:bb:cc:dd:ee:ff", dict);
+
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_TRUE);
+  g_variant_unref (dict);
+  dict = make_connected_dict (FALSE);
+  m = bt_signal_event_matches (
+    "/org/bluez/hci0/dev_aa_bb_cc_dd_ee_ff",
+    "AA:BB:CC:DD:EE:FF", dict);
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_FALSE);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_hci_prefix (void)
+{
+  GVariant *dict = make_connected_dict (TRUE);
+  BtSignalMatch m = bt_signal_event_matches (
+    "/org/bluez/hci1/dev_11_22_33_44_55_66",
+    "11:22:33:44:55:66", dict);
+
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_TRUE);
+  g_variant_unref (dict);
+  dict = make_connected_dict (FALSE);
+  m = bt_signal_event_matches (
+    "/org/bluez/hci10/dev_BB_BB_BB_BB_BB_02",
+    "BB:BB:BB:BB:BB:02", dict);
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_FALSE);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_other_device (void)
+{
+  GVariant *dict = make_connected_dict (TRUE);
+  BtSignalMatch m = bt_signal_event_matches (
+    "/org/bluez/hci0/dev_AA_AA_AA_AA_AA_01",
+    "11:22:33:44:55:66", dict);
+
+  g_assert_cmpint (m, ==, BT_SIGNAL_NO_MATCH);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_strange_path (void)
+{
+  GVariant *dict = make_connected_dict (TRUE);
+
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/other_11_22_33_44_55_66",
+    "11:22:33:44:55:66", dict), ==, BT_SIGNAL_NO_MATCH);
+  g_assert_cmpint (bt_signal_event_matches (
+    "/weird/path", "11:22:33:44:55:66", dict), ==,
+    BT_SIGNAL_NO_MATCH);
+  g_assert_cmpint (bt_signal_event_matches (
+    "", "11:22:33:44:55:66", dict), ==, BT_SIGNAL_NO_MATCH);
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/dev_", "11:22:33:44:55:66", dict), ==,
+    BT_SIGNAL_NO_MATCH);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_no_connected (void)
+{
+  GVariant *dict = make_empty_dict ();
+
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66",
+    "11:22:33:44:55:66", dict), ==, BT_SIGNAL_NO_MATCH);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_wrong_type (void)
+{
+  GVariant *dict = make_string_dict ();
+
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66",
+    "11:22:33:44:55:66", dict), ==, BT_SIGNAL_NO_MATCH);
+  g_variant_unref (dict);
+}
+
+static void
+test_signal_nulls (void)
+{
+  GVariant *dict = make_connected_dict (TRUE);
+
+  g_assert_cmpint (bt_signal_event_matches (
+    NULL, "11:22:33:44:55:66", dict), ==, BT_SIGNAL_NO_MATCH);
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66", NULL, dict), ==,
+    BT_SIGNAL_NO_MATCH);
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66",
+    "11:22:33:44:55:66", NULL), ==, BT_SIGNAL_NO_MATCH);
+  g_assert_cmpint (bt_signal_event_matches (
+    "/org/bluez/hci0/dev_11_22_33_44_55_66", "", dict), ==,
+    BT_SIGNAL_NO_MATCH);
+  g_variant_unref (dict);
+}
+
+static void
+test_dash_mac_filter (void)
+{
+  GList    *devs;
+  BtDevice *hit;
+
+  push_fakebin ();
+  g_setenv ("QS_FAKE_BT_DEVICES",
+            "Device 63:2F:6B:7A:0D:E9 63-2F-6B-7A-0D-E9\n"
+            "Device 10:5A:17:13:52:05 10-5A-17-13-52-05\n"
+            "Device AA:BB:CC:DD:EE:12 AABBCCDDEE12\n"
+            "Device AA:BB:CC:DD:EE:13 aa-bb-cc-dd-ee-13\n"
+            "Device AA:BB:CC:DD:EE:14 My-Headset-Pro\n"
+            "Device AA:BB:CC:DD:EE:15 AABBCCDDEE15\n"
+            "Device 11:22:33:44:55:66 Buds",
+            TRUE);
+  g_setenv ("QS_FAKE_BT_PAIRED", "", TRUE);
+  g_setenv ("QS_FAKE_BT_TRUSTED", "", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECTED", "", TRUE);
+  devs = list_bt_devices ();
+  g_assert_nonnull (devs);
+  g_assert_null (find_dev (devs, "63:2F:6B:7A:0D:E9"));
+  g_assert_null (find_dev (devs, "10:5A:17:13:52:05"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:12"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:13"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:15"));
+  hit = find_dev (devs, "AA:BB:CC:DD:EE:14");
+  g_assert_nonnull (hit);
+  g_assert_cmpstr (hit->name, ==, "My-Headset-Pro");
+  hit = find_dev (devs, "11:22:33:44:55:66");
+  g_assert_nonnull (hit);
+  g_assert_cmpstr (hit->name, ==, "Buds");
+  g_assert_cmpuint (g_list_length (devs), ==, 2);
+  g_list_free_full (devs, bt_device_free);
+  g_unsetenv ("QS_FAKE_BT_DEVICES");
+  g_unsetenv ("QS_FAKE_BT_PAIRED");
+  g_unsetenv ("QS_FAKE_BT_TRUSTED");
+  g_unsetenv ("QS_FAKE_BT_CONNECTED");
+  pop_path ();
+}
+
 gint
 main (gint argc, gchar **argv)
 {
@@ -213,5 +418,16 @@ main (gint argc, gchar **argv)
   g_test_add_func ("/bt/fill_flags", test_fill_flags);
   g_test_add_func ("/bt/list", test_list);
   g_test_add_func ("/bt/set_powered", test_set_powered);
+  g_test_add_func ("/bt/signal_exact_true", test_signal_exact_true);
+  g_test_add_func ("/bt/signal_exact_false", test_signal_exact_false);
+  g_test_add_func ("/bt/signal_case_insensitive",
+                   test_signal_case_insensitive);
+  g_test_add_func ("/bt/signal_hci_prefix", test_signal_hci_prefix);
+  g_test_add_func ("/bt/signal_other_device", test_signal_other_device);
+  g_test_add_func ("/bt/signal_strange_path", test_signal_strange_path);
+  g_test_add_func ("/bt/signal_no_connected", test_signal_no_connected);
+  g_test_add_func ("/bt/signal_wrong_type", test_signal_wrong_type);
+  g_test_add_func ("/bt/signal_nulls", test_signal_nulls);
+  g_test_add_func ("/bt/dash_mac_filter", test_dash_mac_filter);
   return g_test_run ();
 }

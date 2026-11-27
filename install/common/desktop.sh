@@ -22,7 +22,7 @@ cat > "$TMP_DESKTOP" <<EOF
 [Xfce Panel]
 Type=X-XFCE-PanelPlugin
 Name=Quick Settings
-Version=1.7.0
+Version=1.8.0
 Comment=Quick access to Wi-Fi, Bluetooth, brightness, volume and power settings for the Xfce panel
 Icon=preferences-system-symbolic
 X-XFCE-Module=quicksettings

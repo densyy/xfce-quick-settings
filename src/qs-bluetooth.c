@@ -3,6 +3,7 @@
 #include "qs-ui.h"
 #include "qs-util.h"
 #include "qs-bt-backend.h"
+#include "qs-bt-signal.h"
 
 #include <string.h>
 
@@ -609,12 +610,16 @@ typedef struct
   gchar        **verbs; /* remaining verbs, NULL-terminated (owned) */
   gint           idx;
   gboolean       disconnecting;
-  gint           verify_tries; /* remaining `info` re-reads in verify stage */
-  guint          verify_delay_ms; /* delay between verify re-reads */
-  guint          verify_src; /* pending verify timeout (0 when none) */
+  gboolean       expected_connected; /* Connected value the link waits for */
+  gboolean       initial_connected; /* Connected from the toggle decision info */
+  gboolean       initial_paired; /* Paired from the toggle decision info */
+  gboolean       initial_trusted; /* Trusted from the toggle decision info */
+  BtSignalWatch *watch; /* GDBus subscription, NULL when inactive */
+  guint          fallback_src; /* pending fallback timeout (0 when none) */
+  gchar         *verb_error; /* error detail of the first failed verb (owned) */
+  gint           pending; /* outstanding async commands (verbs + confirm read) */
+  gboolean       finished; /* completion done, draining pending callbacks */
   gboolean       cancelled; /* set by bt_cancel_all() / destroy path */
-  gboolean       verifying_after_fail; /* verifying state after a failed verb */
-  gchar         *fail_detail; /* error detail of the failed verb (owned) */
 } BtLink;
 
 static GList *bt_active_links = NULL;
@@ -631,13 +636,10 @@ bt_link_untrack (BtLink *l)
   bt_active_links = g_list_remove (bt_active_links, l);
 }
 
-#define BT_VERIFY_MAX_TRIES 24
-#define BT_VERIFY_DELAY_MS 250
-#define BT_VERIFY_AFTER_FAIL_TRIES 11
-#define BT_VERIFY_AFTER_FAIL_DELAY_MS 250
-
 #define BT_LINK_CTL_TIMEOUT_SECS 15
 #define BT_LINK_CMD_TIMEOUT_SECS 20
+
+#define BT_SIGNAL_FALLBACK_TIMEOUT_SECS 8
 
 static guint
 bt_link_timeout_secs (void)
@@ -650,16 +652,35 @@ bt_link_timeout_secs (void)
   return (guint) value;
 }
 
-static const gchar *
-bt_doing_label (const gchar *verb)
+static guint
+bt_signal_timeout_secs (void)
 {
-  if (g_strcmp0 (verb, "pair") == 0)
-    return "Pairing…";
-  if (g_strcmp0 (verb, "trust") == 0)
-    return "Trusting…";
-  if (g_strcmp0 (verb, "disconnect") == 0)
-    return "Disconnecting…";
-  return "Connecting…";
+  const gchar *env = g_getenv ("QS_BT_SIGNAL_TIMEOUT_SECS");
+  gint         value;
+
+  if (env == NULL || !qs_parse_int_checked (env, &value) || value <= 0)
+    return BT_SIGNAL_FALLBACK_TIMEOUT_SECS;
+  return (guint) value;
+}
+
+static void
+bt_link_unsubscribe (BtLink *l)
+{
+  if (l->watch != NULL)
+    {
+      bt_signal_unsubscribe (l->watch);
+      l->watch = NULL;
+    }
+}
+
+static void
+bt_link_remove_fallback (BtLink *l)
+{
+  if (l->fallback_src != 0)
+    {
+      g_source_remove (l->fallback_src);
+      l->fallback_src = 0;
+    }
 }
 
 static void
@@ -667,47 +688,58 @@ bt_link_free (BtLink *l)
 {
   if (l == NULL)
     return;
-  if (l->verify_src != 0)
-    {
-      g_source_remove (l->verify_src);
-      l->verify_src = 0;
-    }
+  bt_link_unsubscribe (l);
+  bt_link_remove_fallback (l);
   bt_link_untrack (l);
   g_free (l->mac);
   g_free (l->name);
-  g_free (l->fail_detail);
+  g_free (l->verb_error);
   g_strfreev (l->verbs);
   qs_unref (l->qs);
   g_free (l);
 }
 
 static void
-bt_link_finish (BtLink *l)
+bt_link_try_free (BtLink *l)
 {
-  gchar *copy = (l != NULL && l->mac != NULL) ? g_strdup (l->mac) : NULL;
-
-  bt_clear_busy_mac (copy);
-  g_free (copy);
-  bt_link_free (l);
+  if (l->finished && l->pending <= 0)
+    bt_link_free (l);
 }
 
-/* Cancels pending verifies; next callbacks free without touching widgets. */
+/* Marks the link complete without touching widgets (cancel/dead path). */
+static void
+bt_link_drop (BtLink *l)
+{
+  gchar *copy;
+
+  if (l->finished)
+    return;
+  l->finished = TRUE;
+  bt_link_unsubscribe (l);
+  bt_link_remove_fallback (l);
+  copy = (l->mac != NULL) ? g_strdup (l->mac) : NULL;
+  bt_clear_busy_mac (copy);
+  g_free (copy);
+  bt_link_try_free (l);
+}
+
+/* Cancels pending links; next callbacks drop without touching widgets. */
 void
 bt_cancel_all (void)
 {
+  GList *copy = g_list_copy (bt_active_links);
   GList *l;
 
-  for (l = bt_active_links; l != NULL; l = l->next)
+  for (l = copy; l != NULL; l = l->next)
     {
       BtLink *link = l->data;
 
       link->cancelled = TRUE;
-      if (link->verify_src != 0)
-        {
-          g_source_remove (link->verify_src);
-          link->verify_src = 0;
-        }
+      bt_link_unsubscribe (link);
+      bt_link_remove_fallback (link);
+      bt_link_drop (link);
     }
+  g_list_free (copy);
 }
 
 /* First non-empty line of output/errout for status details (owned/NULL). */
@@ -736,15 +768,84 @@ bt_first_detail (const gchar *output,
   return copy;
 }
 
+/* Paired/trusted flags for a link success. A connected device is paired
+ * by definition; otherwise the cached values are preserved. */
+static void
+bt_link_cached_flags (const gchar *mac,
+                      gboolean       connected,
+                      gboolean      *paired,
+                      gboolean      *trusted)
+{
+  GList *l;
+
+  if (paired != NULL)
+    *paired = TRUE;
+  if (trusted != NULL)
+    *trusted = FALSE;
+  for (l = bt_cache_devs; l != NULL; l = l->next)
+    {
+      BtDevice *dev = l->data;
+
+      if (dev != NULL && g_strcmp0 (dev->mac, mac) == 0)
+        {
+          if (!connected && paired != NULL)
+            *paired = dev->paired;
+          if (trusted != NULL)
+            *trusted = dev->trusted;
+          break;
+        }
+    }
+}
+
+static void
+bt_link_succeed (BtLink  *l,
+                 gboolean paired,
+                 gboolean trusted,
+                 gboolean connected)
+{
+  gchar *msg;
+  gchar *copy;
+
+  if (l->finished)
+    return;
+  l->finished = TRUE;
+  bt_link_unsubscribe (l);
+  bt_link_remove_fallback (l);
+  if (!g_atomic_int_get (&l->qs->dead) && !l->cancelled)
+    {
+      msg = g_strdup_printf (connected ? "Connected to %s."
+                                       : "Disconnected from %s.",
+                             l->name);
+      gtk_label_set_text (GTK_LABEL (l->qs->bt_status), msg);
+      g_free (msg);
+      bt_cache_update (l->mac, paired, trusted, connected, TRUE);
+      if (!bt_update_row (l->qs, l->mac, connected, paired))
+        bt_fill_list (l->qs, bt_cache_devs, "No devices found.");
+    }
+  copy = (l->mac != NULL) ? g_strdup (l->mac) : NULL;
+  bt_clear_busy_mac (copy);
+  g_free (copy);
+  bt_link_try_free (l);
+}
+
 static void
 bt_link_fail (BtLink      *l,
               const gchar *verb,
-              const gchar *detail)
+              const gchar *detail,
+              gboolean     reload)
 {
   gchar *msg;
+  gchar *copy;
 
+  if (l->finished)
+    return;
+  l->finished = TRUE;
+  bt_link_unsubscribe (l);
+  bt_link_remove_fallback (l);
   if (!g_atomic_int_get (&l->qs->dead) && !l->cancelled)
     {
+      if (reload)
+        bt_start_load_thread (l->qs);
       if (detail != NULL && *detail != '\0')
         msg = g_strdup_printf ("Failed to %s %s: %s", verb, l->name,
                                detail);
@@ -753,148 +854,158 @@ bt_link_fail (BtLink      *l,
       gtk_label_set_text (GTK_LABEL (l->qs->bt_status), msg);
       g_free (msg);
     }
-  bt_link_finish (l);
+  copy = (l->mac != NULL) ? g_strdup (l->mac) : NULL;
+  bt_clear_busy_mac (copy);
+  g_free (copy);
+  bt_link_try_free (l);
 }
 
 static void bt_link_run_next (BtLink *l);
-static void bt_link_verify_done (const gchar *output,
-                                 const gchar *errout,
-                                 gboolean     ok,
-                                 gpointer     user_data);
+static gboolean bt_signal_fallback_timeout (gpointer data);
+static void bt_fallback_info_done (const gchar *output,
+                                   const gchar *errout,
+                                   gboolean     ok,
+                                   gpointer     user_data);
 
-/* Starts the verify stage: re-read `info` until the real state shows. */
+/* Arms the single-shot fallback after the last verb ends. The fallback
+ * closes the link when no signal arrives; it never polls. */
 static void
-bt_link_start_verify (BtLink *l,
-                      gint    tries,
-                      guint   delay_ms)
+bt_link_arm_fallback (BtLink *l)
 {
-  gchar *cmd;
-  gchar *mac_q;
-
-  gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-  l->verify_tries = tries;
-  l->verify_delay_ms = delay_ms;
-  mac_q = g_shell_quote (l->mac);
-  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
-  g_free (mac_q);
-  run_command_async (cmd, bt_link_verify_done, l);
-  g_free (cmd);
+  if (l->finished || l->cancelled || l->fallback_src != 0)
+    return;
+  l->fallback_src = g_timeout_add_seconds (bt_signal_timeout_secs (),
+                                           bt_signal_fallback_timeout, l);
 }
 
-/* Re-reads `info` while the verify stage is still inconclusive. */
+/* Fallback when no signal arrives: at most one `info` confirmation read,
+ * then success or failure with the verb detail. Never loops. */
 static gboolean
-bt_verify_timeout (gpointer data)
+bt_signal_fallback_timeout (gpointer data)
 {
   BtLink *l = data;
   gchar  *cmd;
+  gchar  *mac_q;
 
-  l->verify_src = 0;
-  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
+  l->fallback_src = 0;
+  if (l->finished || l->cancelled || g_atomic_int_get (&l->qs->dead))
     {
-      bt_link_finish (l);
+      bt_link_drop (l);
       return G_SOURCE_REMOVE;
     }
-  {
-    gchar *mac_q = g_shell_quote (l->mac);
-
-    cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
-    g_free (mac_q);
-  }
-  run_command_async (cmd, bt_link_verify_done, l);
+  mac_q = g_shell_quote (l->mac);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 1 info %s", mac_q);
+  g_free (mac_q);
+  l->pending++;
+  run_command_async (cmd, bt_fallback_info_done, l);
   g_free (cmd);
   return G_SOURCE_REMOVE;
 }
 
-static gchar *
-bt_steal_fail_detail (BtLink *l)
-{
-  gchar *detail = l->fail_detail;
-
-  l->fail_detail = NULL;
-  return detail;
-}
-
+/* GDBus event handler: only a value matching the expected Connected
+ * state closes the link. Opposite or foreign events are ignored. */
 static void
-bt_verify_success (BtLink  *l,
-                   gboolean paired,
-                   gboolean trusted,
-                   gboolean connected)
+bt_signal_connected_changed (const gchar *object_path,
+                             GVariant    *changed_properties,
+                             const gchar *sender_name,
+                             gpointer     user_data)
 {
-  gchar *msg = g_strdup_printf (connected ? "Connected to %s."
-                                          : "Disconnected from %s.",
-                                l->name);
+  BtLink       *l = user_data;
+  BtSignalMatch match;
 
-  gtk_label_set_text (GTK_LABEL (l->qs->bt_status), msg);
-  g_free (msg);
-  bt_cache_update (l->mac, paired, trusted, connected, TRUE);
-  if (!bt_update_row (l->qs, l->mac, connected, paired))
-    bt_fill_list (l->qs, bt_cache_devs, "No devices found.");
-  bt_link_finish (l);
-}
-
-static void
-bt_verify_retry (BtLink *l)
-{
-  l->verify_tries--;
-  gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-  l->verify_src = g_timeout_add (l->verify_delay_ms,
-                                 bt_verify_timeout, l);
-}
-
-static void
-bt_verify_give_up (BtLink      *l,
-                   gchar       *detail,
-                   const gchar *verb)
-{
-  bt_start_load_thread (l->qs);
-  bt_link_fail (l, verb, detail);
-  g_free (detail);
-}
-
-static void
-bt_link_verify_done (const gchar *output,
-                     const gchar *errout,
-                     gboolean     ok,
-                     gpointer     user_data)
-{
-  BtLink  *l = user_data;
-  gboolean paired = FALSE;
-  gboolean trusted = FALSE;
-  gboolean connected = FALSE;
-
-  (void) errout;
-  (void) ok;
-  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
+  (void) sender_name;
+  if (l == NULL || l->finished || l->cancelled
+      || g_atomic_int_get (&l->qs->dead))
     {
-      bt_link_finish (l);
+      if (l != NULL)
+        bt_link_drop (l);
+      return;
+    }
+  match = bt_signal_event_matches (object_path, l->mac, changed_properties);
+  if (l->expected_connected && match == BT_SIGNAL_CONNECTED_TRUE)
+    {
+      gboolean paired = TRUE;
+      gboolean trusted = FALSE;
+
+      bt_link_cached_flags (l->mac, TRUE, &paired, &trusted);
+      bt_link_succeed (l, paired, trusted, TRUE);
+    }
+  else if (!l->expected_connected && match == BT_SIGNAL_CONNECTED_FALSE)
+    {
+      gboolean paired = TRUE;
+      gboolean trusted = FALSE;
+
+      bt_link_cached_flags (l->mac, FALSE, &paired, &trusted);
+      bt_link_succeed (l, paired, trusted, FALSE);
+    }
+}
+
+/* Subscribes before the first verb spawn and checks the current value.
+ * When the current value already matches the expected one, the link
+ * completes without spawning any link verb. */
+static gboolean
+bt_link_ensure_signal (BtLink *l)
+{
+  GError *error = NULL;
+
+  if (l->watch != NULL)
+    return TRUE;
+  l->expected_connected = !l->disconnecting;
+  gtk_label_set_text (GTK_LABEL (l->qs->bt_status),
+                      l->disconnecting ? "Disconnecting…" : "Connecting…");
+  l->watch = bt_signal_subscribe_fn (bt_signal_connected_changed, l,
+                                     &error);
+  if (error != NULL)
+    g_error_free (error);
+  if (l->initial_connected == l->expected_connected)
+    {
+      bt_link_succeed (l, l->initial_paired, l->initial_trusted,
+                       l->initial_connected);
+      return FALSE;
+    }
+  return TRUE;
+}
+
+static void
+bt_fallback_info_done (const gchar *output,
+                       const gchar *errout,
+                       gboolean     ok,
+                       gpointer     user_data)
+{
+  BtLink      *l = user_data;
+  gboolean     paired = FALSE;
+  gboolean     trusted = FALSE;
+  gboolean     connected = FALSE;
+  const gchar *verb;
+
+  (void) ok;
+  l->pending--;
+  if (l->finished || l->cancelled || g_atomic_int_get (&l->qs->dead))
+    {
+      bt_link_drop (l);
       return;
     }
   bt_info_text_flags (output, &paired, &trusted, &connected);
-  if ((connected && !l->disconnecting) || (!connected && l->disconnecting))
+  if (connected == l->expected_connected)
     {
-      bt_verify_success (l, paired, trusted, connected);
+      bt_link_succeed (l, paired, trusted, connected);
       return;
     }
-  if (l->verify_tries > 1)
+  verb = l->disconnecting ? "disconnect" : "connect";
+  if (l->verb_error != NULL)
     {
-      bt_verify_retry (l);
-      return;
-    }
-  if (l->disconnecting)
-    {
-      gchar *detail = NULL;
+      gchar *detail = l->verb_error;
 
-      if (l->verifying_after_fail)
-        detail = bt_steal_fail_detail (l);
-      bt_verify_give_up (l, detail, "disconnect");
+      l->verb_error = NULL;
+      bt_link_fail (l, verb, detail, TRUE);
+      g_free (detail);
     }
   else
     {
-      gchar *detail = bt_steal_fail_detail (l);
+      gchar *detail = bt_first_detail (output, errout);
 
-      if (!l->verifying_after_fail)
-        detail = bt_first_detail (output, errout);
-      bt_verify_give_up (l, detail, "connect");
+      bt_link_fail (l, verb, detail, TRUE);
+      g_free (detail);
     }
 }
 
@@ -906,10 +1017,12 @@ bt_link_done (const gchar *output,
 {
   BtLink      *l = user_data;
   const gchar *verb;
+  gint         count = 0;
 
-  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
+  l->pending--;
+  if (l->finished || l->cancelled || g_atomic_int_get (&l->qs->dead))
     {
-      bt_link_finish (l);
+      bt_link_drop (l);
       return;
     }
   verb = (l->verbs != NULL) ? l->verbs[l->idx] : "connect";
@@ -917,23 +1030,15 @@ bt_link_done (const gchar *output,
     verb = l->disconnecting ? "disconnect" : "connect";
   if (!ok || bt_output_is_error (output, errout))
     {
-      gchar *detail = bt_first_detail (output, errout);
-
-      if (g_strcmp0 (verb, "connect") == 0
-          || g_strcmp0 (verb, "disconnect") == 0)
-        {
-          /* The verb may have been cut short by our own watchdog while
-           * BlueZ kept working in the background: the device often does
-           * connect a moment later. Confirm the real state before
-           * showing an error. */
-          l->fail_detail = detail;
-          l->verifying_after_fail = TRUE;
-          bt_link_start_verify (l, BT_VERIFY_AFTER_FAIL_TRIES,
-                                BT_VERIFY_AFTER_FAIL_DELAY_MS);
-          return;
-        }
-      bt_link_fail (l, verb, detail);
-      g_free (detail);
+      /* A failed verb may still connect in the background: keep the
+       * subscription until the event or the fallback. */
+      if (l->verb_error == NULL)
+        l->verb_error = bt_first_detail (output, errout);
+      if (l->verbs != NULL)
+        while (l->verbs[count] != NULL)
+          count++;
+      l->idx = count;
+      bt_link_arm_fallback (l);
       return;
     }
   l->idx++;
@@ -945,19 +1050,19 @@ bt_link_run_next (BtLink *l)
 {
   gchar *cmd;
 
-  if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
+  if (l->finished || l->cancelled || g_atomic_int_get (&l->qs->dead))
     {
-      bt_link_finish (l);
+      bt_link_drop (l);
       return;
     }
   if (l->verbs == NULL || l->verbs[l->idx] == NULL)
     {
-      /* All verbs done: only trust `info` saying Connected yes/no. */
-      bt_link_start_verify (l, BT_VERIFY_MAX_TRIES, BT_VERIFY_DELAY_MS);
+      /* All verbs done: the event or the fallback closes the link. */
+      bt_link_arm_fallback (l);
       return;
     }
-  gtk_label_set_text (GTK_LABEL (l->qs->bt_status),
-                      bt_doing_label (l->verbs[l->idx]));
+  if (!bt_link_ensure_signal (l))
+    return;
   {
     gchar *mac_q = g_shell_quote (l->mac);
 
@@ -966,6 +1071,7 @@ bt_link_run_next (BtLink *l)
                            mac_q);
     g_free (mac_q);
   }
+  l->pending++;
   run_command_async_timeout (cmd, bt_link_done, l, bt_link_timeout_secs ());
   g_free (cmd);
 }
@@ -986,15 +1092,18 @@ bt_toggle_info_done (const gchar *output,
   (void) ok;
   if (g_atomic_int_get (&l->qs->dead) || l->cancelled)
     {
-      bt_link_finish (l);
+      bt_link_drop (l);
       return;
     }
   if (output == NULL)
     {
-      bt_link_fail (l, "read", "could not query device info");
+      bt_link_fail (l, "read", "could not query device info", FALSE);
       return;
     }
   bt_info_text_flags (output, &paired, &trusted, &connected);
+  l->initial_connected = connected;
+  l->initial_paired = paired;
+  l->initial_trusted = trusted;
   if (connected)
     {
       l->disconnecting = TRUE;
@@ -1046,7 +1155,15 @@ bt_toggle_device (QuickSettings *qs,
   l->verbs = NULL;
   l->idx = 0;
   l->disconnecting = FALSE;
-  l->verify_src = 0;
+  l->expected_connected = FALSE;
+  l->initial_connected = FALSE;
+  l->initial_paired = FALSE;
+  l->initial_trusted = FALSE;
+  l->watch = NULL;
+  l->fallback_src = 0;
+  l->verb_error = NULL;
+  l->pending = 0;
+  l->finished = FALSE;
   l->cancelled = FALSE;
   bt_set_busy_mac (mac);
   bt_link_track (l);

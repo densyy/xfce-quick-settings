@@ -13,6 +13,8 @@
 #include "qs-net.h"
 #include "qs-util.h"
 #include "qs-bt-backend.h"
+#include "qs-bt-signal.h"
+#include "bt-signal-helper.h"
 
 static gboolean have_display = FALSE;
 static gchar   *fakebin = NULL;
@@ -88,12 +90,65 @@ reset_fake_env (void)
     "QS_FAKE_BT_INFO_CONNECTED", "QS_FAKE_BT_STATE",
     "QS_FAKE_BT_CONNECT_FAIL", "QS_FAKE_BT_DISCONNECT_FAIL",
     "QS_FAKE_BT_CONNECT_DELAY_MS", "QS_FAKE_BT_CONNECT_STATE_EARLY",
-    "QS_FAKE_BT_KEEP_STATE", "QS_BT_LINK_TIMEOUT_SECS"
+    "QS_FAKE_BT_KEEP_STATE", "QS_BT_LINK_TIMEOUT_SECS",
+    "QS_BT_SIGNAL_TIMEOUT_SECS",
+    "QS_FAKE_BT_SIGNAL", "QS_FAKE_BT_SIGNAL_PATH",
+    "QS_FAKE_BT_SIGNAL_SENDER"
   };
   guint i;
 
   for (i = 0; i < G_N_ELEMENTS (vars); i++)
     g_unsetenv (vars[i]);
+  bt_signal_set_subscribe_fn (NULL);
+}
+
+static BtSignalWatch *captured_watch = NULL;
+static guint subscribe_count = 0;
+
+static BtSignalWatch *
+test_subscribe_capture (BtSignalChangedCb cb,
+                        gpointer          user_data,
+                        GError          **error)
+{
+  (void) error;
+  if (captured_watch != NULL)
+    {
+      captured_watch = NULL;
+    }
+  captured_watch = bt_signal_watch_new_for_test (cb, user_data);
+  subscribe_count++;
+  return captured_watch;
+}
+
+static void
+test_subscribe_install (void)
+{
+  captured_watch = NULL;
+  subscribe_count = 0;
+  bt_signal_set_subscribe_fn (test_subscribe_capture);
+}
+
+static void
+test_subscribe_restore (void)
+{
+  bt_signal_set_subscribe_fn (NULL);
+  captured_watch = NULL;
+  subscribe_count = 0;
+}
+
+static void
+test_emit_connected (const gchar *mac,
+                     gboolean     connected)
+{
+  g_assert_nonnull (captured_watch);
+  bt_helper_emit_connected (captured_watch, mac, connected);
+}
+
+static void
+test_emit_without_connected (const gchar *mac)
+{
+  g_assert_nonnull (captured_watch);
+  bt_helper_emit_without_connected (captured_watch, mac);
 }
 
 static void
@@ -842,6 +897,9 @@ test_link_connect_success (void)
   GtkWidget     *row;
   gchar         *log;
   gchar         *state;
+  gint64         emit_us;
+  gint64         done_us;
+  guint          latency_ms;
 
   if (skip_no_display ())
     return;
@@ -855,6 +913,8 @@ test_link_connect_success (void)
   create_state_file (state, "no");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   enable_connect_success ();
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "2000", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -864,26 +924,28 @@ test_link_connect_success (void)
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "On");
 
   g_signal_emit_by_name (qs->bt_list, "row-selected", row);
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  g_assert_cmpint (subscribe_count, ==, 1);
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
-                   "Reading device…");
-  g_signal_emit_by_name (qs->bt_list, "row-selected", row);
+                   "Connecting…");
+  emit_us = g_get_monotonic_time ();
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
   g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 2);
+  done_us = g_get_monotonic_time ();
+  latency_ms = (guint) ((done_us - emit_us) / 1000);
+  g_assert_cmpuint (latency_ms, <, 500);
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
   g_assert_true (log_has (log, "connect 11:22:33:44:55:66"));
-  assert_file_text (state, "yes\n");
   row = find_row (qs, "11:22:33:44:55:66");
   g_assert_nonnull (row);
   g_assert_true (row_connected (row));
   g_assert_cmpstr (row_state (row), ==, "Connected");
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "Buds");
+  run_loop_ms (2600);
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 1000));
 
-  bt_show_page (qs);
-  g_assert_false (qs->scanning_bt);
-  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "Buds");
-  row = find_row (qs, "11:22:33:44:55:66");
-  g_assert_nonnull (row);
-  g_assert_true (row_connected (row));
-
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
@@ -911,6 +973,8 @@ test_link_pair_trust_connect (void)
   g_setenv ("QS_FAKE_BT_DEVICES", "Device 11:22:33:44:55:66 Buds", TRUE);
   g_setenv ("QS_FAKE_BT_INFO_PAIRED", "no", TRUE);
   g_setenv ("QS_FAKE_BT_INFO_TRUSTED", "no", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "1500", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -918,18 +982,18 @@ test_link_pair_trust_connect (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-activated", row);
-  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
-                   "Reading device…");
-  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 8000));
+  g_assert_cmpint (subscribe_count, ==, 1);
   g_assert_true (log_has (log, "pair 11:22:33:44:55:66"));
   g_assert_true (log_has (log, "trust 11:22:33:44:55:66"));
-  g_assert_true (log_has (log, "connect 11:22:33:44:55:66"));
-  g_assert_true (log_has (log, "info 11:22:33:44:55:66"));
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 2);
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
   row = find_row (qs, "11:22:33:44:55:66");
   g_assert_nonnull (row);
   g_assert_true (row_connected (row));
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
@@ -942,6 +1006,9 @@ test_link_disconnect_success (void)
   GtkWidget     *row;
   gchar         *log;
   gchar         *state;
+  gint64         emit_us;
+  gint64         done_us;
+  guint          latency_ms;
 
   if (skip_no_display ())
     return;
@@ -955,9 +1022,12 @@ test_link_disconnect_success (void)
   create_state_file (state, "yes");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   g_setenv ("QS_FAKE_BT_DEVICES", "Device BB:BB:BB:BB:BB:02 Headset", TRUE);
+  g_setenv ("QS_FAKE_BT_PAIRED", "Device BB:BB:BB:BB:BB:02 Headset", TRUE);
+  g_setenv ("QS_FAKE_BT_TRUSTED", "Device BB:BB:BB:BB:BB:02 Headset", TRUE);
   g_setenv ("QS_FAKE_BT_CONNECTED", "Device BB:BB:BB:BB:BB:02 Headset", TRUE);
   g_setenv ("QS_FAKE_BT_INFO_PAIRED", "yes", TRUE);
   g_setenv ("QS_FAKE_BT_INFO_TRUSTED", "yes", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -967,26 +1037,31 @@ test_link_disconnect_success (void)
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "Headset");
 
   g_signal_emit_by_name (qs->bt_list, "row-selected", row);
-  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
-                   "Reading device…");
+  g_assert_true (wait_log_struct (log, "disconnect BB:BB:BB:BB:BB:02", 5000));
+  g_assert_cmpint (subscribe_count, ==, 1);
+  emit_us = g_get_monotonic_time ();
+  test_emit_connected ("BB:BB:BB:BB:BB:02", FALSE);
   g_assert_true (wait_label (qs->bt_status, "Disconnected from Headset.", FALSE,
                              5000));
+  done_us = g_get_monotonic_time ();
+  latency_ms = (guint) ((done_us - emit_us) / 1000);
+  g_assert_cmpuint (latency_ms, <, 500);
   g_assert_true (log_has (log, "disconnect BB:BB:BB:BB:BB:02"));
-  assert_file_text (state, "no\n");
+  g_assert_cmpuint (log_count (log, "info BB:BB:BB:BB:BB:02"), ==, 1);
   row = find_row (qs, "BB:BB:BB:BB:BB:02");
   g_assert_nonnull (row);
   g_assert_false (row_connected (row));
   g_assert_cmpstr (row_state (row), ==, "Paired");
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "On");
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
 
-/* Regressão do bug reportado: o `connect` é cortado pelo watchdog (o
- * timeout genérico de 5 s matava o bluetoothctl no meio da conexão),
- * mas o BlueZ conecta o aparelho mesmo assim. A UI não pode mostrar
- * "Failed to connect": o estado real do dispositivo é o que manda. */
+/* Regressão do bug reportado: o verbo falha mas o BlueZ conecta mesmo
+ * assim. A falha do verbo não pode falhar de imediato: a assinatura fica
+ * até o evento ou o fallback. */
 static void
 test_link_connect_cut_short_but_connected (void)
 {
@@ -1008,12 +1083,11 @@ test_link_connect_cut_short_but_connected (void)
   create_state_file (state, "no");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   enable_connect_success ();
-  /* Watchdog curto: o connect é cortado no meio. */
-  g_setenv ("QS_BT_LINK_TIMEOUT_SECS", "1", TRUE);
-  /* O connect demora 6 s (mais que o watchdog genérico de 5 s), mas o
-   * BlueZ conecta logo no começo. */
-  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "6000", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_FAIL", "1", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "1500", TRUE);
   g_setenv ("QS_FAKE_BT_CONNECT_STATE_EARLY", "1", TRUE);
+  g_setenv ("QS_BT_SIGNAL_TIMEOUT_SECS", "1", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -1021,19 +1095,24 @@ test_link_connect_cut_short_but_connected (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-activated", row);
-  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 10000));
-  assert_file_text (state, "yes\n");
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  run_loop_ms (300);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
+  g_assert_false (log_has (log, "Failed"));
   row = find_row (qs, "11:22:33:44:55:66");
   g_assert_nonnull (row);
   g_assert_true (row_connected (row));
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
 
-/* O `connect` pode bloquear pelo timeout de página do BlueZ (10 s+): o
- * comando precisa de um watchdog maior que o genérico de 5 s, senão ele
- * morre antes de responder. */
+/* O `connect` pode bloquear pelo timeout de página do BlueZ: o evento
+ * fecha o link com o verbo ainda em execução, sem esperar o watchdog. */
 static void
 test_link_connect_slow_but_ok (void)
 {
@@ -1042,6 +1121,9 @@ test_link_connect_slow_but_ok (void)
   GtkWidget     *row;
   gchar         *log;
   gchar         *state;
+  gint64         emit_us;
+  gint64         done_us;
+  guint          latency_ms;
 
   if (skip_no_display ())
     return;
@@ -1055,8 +1137,8 @@ test_link_connect_slow_but_ok (void)
   create_state_file (state, "no");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   enable_connect_success ();
-  /* Conecta depois de 6 s: maior que o watchdog genérico de 5 s. */
-  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "6000", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "2500", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -1064,9 +1146,18 @@ test_link_connect_slow_but_ok (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-activated", row);
-  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 15000));
-  assert_file_text (state, "yes\n");
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  emit_us = g_get_monotonic_time ();
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
+  done_us = g_get_monotonic_time ();
+  latency_ms = (guint) ((done_us - emit_us) / 1000);
+  g_assert_cmpuint (latency_ms, <, 500);
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
@@ -1095,6 +1186,9 @@ test_link_failure_detail (void)
   g_setenv ("QS_FAKE_BT_INFO_PAIRED", "yes", TRUE);
   g_setenv ("QS_FAKE_BT_INFO_TRUSTED", "yes", TRUE);
   g_setenv ("QS_FAKE_BT_CONNECT_FAIL", "2", TRUE);
+  g_setenv ("QS_FAKE_BT_KEEP_STATE", "1", TRUE);
+  g_setenv ("QS_BT_SIGNAL_TIMEOUT_SECS", "1", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -1102,14 +1196,19 @@ test_link_failure_detail (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-activated", row);
-  /* Antes de acusar falha o estado real é conferido (o comando pode ter
-   * sido cortado com o BlueZ ainda trabalhando). */
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  run_loop_ms (300);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  /* Sem sinal, o fallback com leitura única acusa a falha com detalhe. */
   g_assert_true (wait_label (qs->bt_status,
                              "Failed to connect Buds: Failed to connect: "
-                             "org.bluez.Error.Failed", FALSE, 15000));
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 2);
+                             "org.bluez.Error.Failed", FALSE, 8000));
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 2);
   assert_file_text (state, "no\n");
+  run_loop_ms (2000);
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
@@ -1196,6 +1295,7 @@ test_link_cancel (void)
   GtkWidget     *stack;
   GtkWidget     *row;
   gchar         *log;
+  gchar         *state;
 
   if (skip_no_display ())
     return;
@@ -1206,15 +1306,48 @@ test_link_cancel (void)
   stack = make_fixture (qs, &stack);
   bt_free_caches ();
 
-  row = make_plain_row (qs, "11:22:33:44:55:66", "Buds");
-  g_signal_emit_by_name (qs->bt_list, "row-selected", row);
   bt_cancel_all ();
   bt_cancel_all ();
-  run_loop_ms (500);
-  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
-                   "Reading device…");
+  run_loop_ms (200);
   g_assert_cmpuint (log_count (log, "connect"), ==, 0);
+  g_assert_cmpuint (log_count (log, "info"), ==, 0);
 
+  free_fixture (qs, stack, log);
+
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+  state = g_build_filename (tmp_root, "bt-state-cancel", NULL);
+  create_state_file (state, "no");
+  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
+  enable_connect_success ();
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "2500", TRUE);
+  g_setenv ("QS_BT_SIGNAL_TIMEOUT_SECS", "1", TRUE);
+  test_subscribe_install ();
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+  g_signal_emit_by_name (qs->bt_list, "row-activated", row);
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  bt_cancel_all ();
+  run_loop_ms (300);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  run_loop_ms (3500);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
+  g_assert_cmpuint (log_count (log, "connect 11:22:33:44:55:66"), ==, 1);
+
+  test_subscribe_restore ();
+  g_free (state);
   free_fixture (qs, stack, log);
 }
 
@@ -1239,6 +1372,8 @@ test_link_row_missing_fallback (void)
   create_state_file (state, "no");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   enable_connect_success ();
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "1200", TRUE);
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -1246,8 +1381,10 @@ test_link_row_missing_fallback (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-selected", row);
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
   gtk_container_remove (GTK_CONTAINER (qs->bt_list), row);
   g_assert_cmpuint (bt_row_count (qs), ==, 0);
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
   g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
   g_assert_cmpuint (bt_row_count (qs), ==, 1);
   row = find_row (qs, "11:22:33:44:55:66");
@@ -1255,19 +1392,19 @@ test_link_row_missing_fallback (void)
   g_assert_true (row_connected (row));
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "Buds");
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
 
 static void
-test_link_verify_retry_failure (void)
+test_link_event_fallback_no_signal (void)
 {
   QuickSettings *qs;
   GtkWidget     *stack;
   GtkWidget     *row;
   gchar         *log;
   gchar         *state;
-  guint          waited = 0;
 
   if (skip_no_display ())
     return;
@@ -1277,11 +1414,14 @@ test_link_verify_retry_failure (void)
   qs = qs_new ();
   stack = make_fixture (qs, &stack);
   bt_free_caches ();
-  state = g_build_filename (tmp_root, "bt-state-retry", NULL);
+  state = g_build_filename (tmp_root, "bt-state-fallback", NULL);
   create_state_file (state, "no");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   g_setenv ("QS_FAKE_BT_KEEP_STATE", "1", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "1500", TRUE);
+  g_setenv ("QS_BT_SIGNAL_TIMEOUT_SECS", "1", TRUE);
   enable_connect_success ();
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -1289,22 +1429,123 @@ test_link_verify_retry_failure (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-selected", row);
-  while (waited < 10000
-         && log_count (log, "info 11:22:33:44:55:66") < 9)
-    {
-      run_loop_ms (20);
-      waited += 20;
-    }
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 9);
-  assert_file_text (state, "no\n");
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  g_assert_cmpint (subscribe_count, ==, 1);
   run_loop_ms (500);
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  g_assert_true (wait_label (qs->bt_status, "Failed to connect Buds:",
+                             TRUE, 8000));
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 2);
+  assert_file_text (state, "no\n");
+  run_loop_ms (1500);
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 2);
+  run_loop_ms (2000);
 
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
 
 static void
-test_link_verify_dead (void)
+test_link_event_opposite_ignored (void)
+{
+  QuickSettings *qs;
+  GtkWidget     *stack;
+  GtkWidget     *row;
+  gchar         *log;
+  gchar         *state;
+
+  if (skip_no_display ())
+    return;
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+  state = g_build_filename (tmp_root, "bt-state-opposite", NULL);
+  create_state_file (state, "no");
+  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
+  enable_connect_success ();
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "2000", TRUE);
+  test_subscribe_install ();
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+
+  g_signal_emit_by_name (qs->bt_list, "row-selected", row);
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  test_emit_connected ("11:22:33:44:55:66", FALSE);
+  run_loop_ms (400);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
+  test_emit_without_connected ("11:22:33:44:55:66");
+  run_loop_ms (300);
+  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
+                   "Connecting…");
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
+  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), ==, 1);
+
+  test_subscribe_restore ();
+  g_free (state);
+  free_fixture (qs, stack, log);
+}
+
+static void
+test_link_event_latency (void)
+{
+  QuickSettings *qs;
+  GtkWidget     *stack;
+  GtkWidget     *row;
+  gchar         *log;
+  gchar         *state;
+  gint64         emit_us;
+  gint64         done_us;
+  guint          latency_ms;
+
+  if (skip_no_display ())
+    return;
+  reset_fake_env ();
+  set_path_prefixed ();
+  log = new_log ();
+  qs = qs_new ();
+  stack = make_fixture (qs, &stack);
+  bt_free_caches ();
+  state = g_build_filename (tmp_root, "bt-state-latency", NULL);
+  create_state_file (state, "no");
+  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
+  enable_connect_success ();
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "2000", TRUE);
+  test_subscribe_install ();
+
+  bt_show_page (qs);
+  g_assert_true (wait_load_settled (qs, 5000));
+  row = find_row (qs, "11:22:33:44:55:66");
+  g_assert_nonnull (row);
+
+  g_signal_emit_by_name (qs->bt_list, "row-selected", row);
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
+  emit_us = g_get_monotonic_time ();
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
+  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 5000));
+  done_us = g_get_monotonic_time ();
+  latency_ms = (guint) ((done_us - emit_us) / 1000);
+  g_assert_cmpuint (latency_ms, <, 500);
+  g_message ("bt-event-latency-ms=%u", latency_ms);
+
+  test_subscribe_restore ();
+  g_free (state);
+  free_fixture (qs, stack, log);
+}
+
+static void
+test_link_event_dead_no_touch (void)
 {
   QuickSettings *qs;
   GtkWidget     *stack;
@@ -1324,7 +1565,10 @@ test_link_verify_dead (void)
   create_state_file (state, "no");
   g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
   g_setenv ("QS_FAKE_BT_KEEP_STATE", "1", TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECT_DELAY_MS", "2000", TRUE);
+  g_setenv ("QS_BT_SIGNAL_TIMEOUT_SECS", "2", TRUE);
   enable_connect_success ();
+  test_subscribe_install ();
 
   bt_show_page (qs);
   g_assert_true (wait_load_settled (qs, 5000));
@@ -1332,84 +1576,15 @@ test_link_verify_dead (void)
   g_assert_nonnull (row);
 
   g_signal_emit_by_name (qs->bt_list, "row-selected", row);
-  g_assert_true (wait_log_struct (log, "info 11:22:33:44:55:66", 3000));
-  run_loop_ms (900);
+  g_assert_true (wait_log_struct (log, "connect 11:22:33:44:55:66", 5000));
   g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
-                   "Verifying…");
+                   "Connecting…");
   qs->dead = TRUE;
-  run_loop_ms (1200);
+  test_emit_connected ("11:22:33:44:55:66", TRUE);
+  run_loop_ms (800);
   g_assert_true (qs->dead);
 
-  g_free (state);
-  free_fixture (qs, stack, log);
-}
-
-static void
-test_link_verify_fast_refresh (void)
-{
-  QuickSettings *qs;
-  GtkWidget     *stack;
-  GtkWidget     *row;
-  gchar         *log;
-  gchar         *state;
-  gint64         flipped_us;
-  gint64         done_us;
-  guint          latency_ms;
-  guint          waited = 0;
-
-  if (skip_no_display ())
-    return;
-  reset_fake_env ();
-  set_path_prefixed ();
-  log = new_log ();
-  qs = qs_new ();
-  stack = make_fixture (qs, &stack);
-  bt_free_caches ();
-  state = g_build_filename (tmp_root, "bt-state-fast", NULL);
-  create_state_file (state, "no");
-  g_setenv ("QS_FAKE_BT_STATE", state, TRUE);
-  g_setenv ("QS_FAKE_BT_KEEP_STATE", "1", TRUE);
-  enable_connect_success ();
-
-  bt_show_page (qs);
-  g_assert_true (wait_load_settled (qs, 5000));
-  row = find_row (qs, "11:22:33:44:55:66");
-  g_assert_nonnull (row);
-  g_assert_false (row_connected (row));
-
-  /* O BlueZ só vira Connected=yes DEPOIS que o `connect` retornou: o
-   * verify precisa re-ler `info` até ver o estado novo. O estado vira
-   * `yes` logo após o verify fazer a primeira releitura (2º `info` no
-   * log, o 1º é o do toggle), então a latência medida é puro intervalo
-   * de poll: ~250 ms na cadência nova, ~800 ms na antiga. A virada
-   * espera 150 ms para não ganhar do `info` em voo (que leria o estado
-   * novo no mesmo poll em qualquer cadência e esconderia a regressão). */
-  g_signal_emit_by_name (qs->bt_list, "row-activated", row);
-  g_assert_true (wait_log_struct (log, "info 11:22:33:44:55:66", 3000));
-  while (waited < 5000
-         && log_count (log, "info 11:22:33:44:55:66") < 2)
-    {
-      run_loop_ms (20);
-      waited += 20;
-    }
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 2);
-  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_status)), ==,
-                   "Verifying…");
-  /* Dá tempo do `info` em voo ler o estado velho antes da virada. */
-  run_loop_ms (150);
-  g_file_set_contents (state, "yes\n", -1, NULL);
-  flipped_us = g_get_monotonic_time ();
-  g_assert_true (wait_label (qs->bt_status, "Connected to Buds.", FALSE, 8000));
-  done_us = g_get_monotonic_time ();
-  latency_ms = (guint) ((done_us - flipped_us) / 1000);
-  /* Cadência nova: próximo poll em ~250 ms; antiga: ~800 ms. */
-  g_assert_cmpuint (latency_ms, <, 450);
-  g_assert_cmpuint (log_count (log, "info 11:22:33:44:55:66"), >=, 3);
-  row = find_row (qs, "11:22:33:44:55:66");
-  g_assert_nonnull (row);
-  g_assert_true (row_connected (row));
-  g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (qs->bt_sub)), ==, "Buds");
-
+  test_subscribe_restore ();
   g_free (state);
   free_fixture (qs, stack, log);
 }
@@ -1545,10 +1720,12 @@ main (int argc, char **argv)
   g_test_add_func ("/bt-flow/link_guards", test_link_guards);
   g_test_add_func ("/bt-flow/link_cancel", test_link_cancel);
   g_test_add_func ("/bt-flow/link_row_fallback", test_link_row_missing_fallback);
-  g_test_add_func ("/bt-flow/link_verify_retry", test_link_verify_retry_failure);
-  g_test_add_func ("/bt-flow/link_verify_dead", test_link_verify_dead);
-  g_test_add_func ("/bt-flow/link_verify_fast_refresh",
-                   test_link_verify_fast_refresh);
+  g_test_add_func ("/bt-flow/link_event_fallback",
+                   test_link_event_fallback_no_signal);
+  g_test_add_func ("/bt-flow/link_event_opposite",
+                   test_link_event_opposite_ignored);
+  g_test_add_func ("/bt-flow/link_event_latency", test_link_event_latency);
+  g_test_add_func ("/bt-flow/link_event_dead", test_link_event_dead_no_touch);
   g_test_add_func ("/bt-flow/hide_nameless", test_hide_nameless_devices);
   g_test_add_func ("/bt-flow/teardown", test_teardown_idempotent);
 

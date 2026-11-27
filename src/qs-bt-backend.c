@@ -192,6 +192,51 @@ bt_parse_device_line (const gchar  *line,
       g_free (name);
       return FALSE;
     }
+  {
+    gchar canon_name[13];
+    gchar canon_mac[13];
+    gsize name_len = 0;
+    gsize mac_len = 0;
+    gboolean both_hex = TRUE;
+    const gchar *s;
+
+    for (s = name; *s != '\0'; s++)
+      {
+        if (*s == '-' || *s == ':')
+          continue;
+        if (name_len >= 12 || !g_ascii_isxdigit (*s))
+          {
+            both_hex = FALSE;
+            break;
+          }
+        canon_name[name_len++] = *s;
+      }
+    if (both_hex)
+      {
+        for (s = mac; *s != '\0'; s++)
+          {
+            if (*s == '-' || *s == ':')
+              continue;
+            if (mac_len >= 12 || !g_ascii_isxdigit (*s))
+              {
+                both_hex = FALSE;
+                break;
+              }
+            canon_mac[mac_len++] = *s;
+          }
+      }
+    if (both_hex && name_len == 12 && mac_len == 12)
+      {
+        canon_name[12] = '\0';
+        canon_mac[12] = '\0';
+        if (g_ascii_strcasecmp (canon_name, canon_mac) == 0)
+          {
+            g_free (mac);
+            g_free (name);
+            return FALSE;
+          }
+      }
+  }
   if (g_ascii_strcasecmp (name, "Unknown") == 0
       || g_ascii_strcasecmp (name, "(unknown)") == 0)
     {
@@ -322,4 +367,77 @@ list_bt_devices (void)
   bt_apply_filtered_devices (&devs, "Connected", BT_FLAG_CONNECTED);
 
   return devs;
+}
+
+/* Matches the received object path suffix against the link MAC and
+ * extracts Connected from the changed-properties dictionary. The
+ * adapter prefix (hci0, hci1, ...) is ignored because only the text
+ * after the last slash is compared. Comparison is case-insensitive
+ * and colons in the MAC compare equal to underscores in the path. */
+BtSignalMatch
+bt_signal_event_matches (const gchar *object_path,
+                         const gchar *mac,
+                         GVariant    *changed)
+{
+  const gchar *base;
+  const gchar *dev;
+  gchar       *norm = NULL;
+  gchar       *p;
+  GVariant    *val = NULL;
+  GVariant    *inner = NULL;
+  gboolean     connected = FALSE;
+  gboolean     have = FALSE;
+
+  if (object_path == NULL || mac == NULL || changed == NULL)
+    return BT_SIGNAL_NO_MATCH;
+  if (*mac == '\0' || *object_path == '\0')
+    return BT_SIGNAL_NO_MATCH;
+  if (!g_variant_is_of_type (changed, G_VARIANT_TYPE_VARDICT))
+    return BT_SIGNAL_NO_MATCH;
+  base = strrchr (object_path, '/');
+  if (base != NULL)
+    base++;
+  else
+    base = object_path;
+  if (g_ascii_strncasecmp (base, "dev_", 4) != 0)
+    return BT_SIGNAL_NO_MATCH;
+  dev = base + 4;
+  if (*dev == '\0')
+    return BT_SIGNAL_NO_MATCH;
+  norm = g_strdup (mac);
+  for (p = norm; *p != '\0'; p++)
+    {
+      if (*p == ':')
+        *p = '_';
+    }
+  if (g_ascii_strcasecmp (dev, norm) != 0)
+    {
+      g_free (norm);
+      return BT_SIGNAL_NO_MATCH;
+    }
+  g_free (norm);
+  val = g_variant_lookup_value (changed, "Connected", NULL);
+  if (val == NULL)
+    return BT_SIGNAL_NO_MATCH;
+  if (g_variant_is_of_type (val, G_VARIANT_TYPE_VARIANT))
+    {
+      inner = g_variant_get_variant (val);
+      if (g_variant_is_of_type (inner, G_VARIANT_TYPE_BOOLEAN))
+        {
+          connected = g_variant_get_boolean (inner);
+          have = TRUE;
+        }
+      g_variant_unref (inner);
+    }
+  else if (g_variant_is_of_type (val, G_VARIANT_TYPE_BOOLEAN))
+    {
+      connected = g_variant_get_boolean (val);
+      have = TRUE;
+    }
+  g_variant_unref (val);
+  if (!have)
+    return BT_SIGNAL_NO_MATCH;
+  if (connected)
+    return BT_SIGNAL_CONNECTED_TRUE;
+  return BT_SIGNAL_CONNECTED_FALSE;
 }

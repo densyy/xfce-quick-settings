@@ -19,6 +19,16 @@
 #                                   ANTES da demora (o BlueZ conecta
 #                                   enquanto o cliente ainda espera)
 #   QS_FAKE_BT_KEEP_STATE=1     connect/disconnect nao alteram o estado
+#   QS_FAKE_BT_SIGNAL=Connected=true|Connected=false
+#                                   evento PropertiesChanged a emitir
+#   QS_FAKE_BT_SIGNAL_PATH=caminho   object path do evento (default hci0+MAC)
+#   QS_FAKE_BT_SIGNAL_SENDER=nome    dono no barramento (default :1.fake)
+#   O script nunca emite sinal: o evento Connected sempre vem do hook de
+#   teste (tests/bt-signal-helper.h via bt_signal_test_emit), de forma
+#   sincrona, sem barramento real e sem loop principal — por isso funciona
+#   inclusive com o verbo ainda em execucao. QS_FAKE_BT_KEEP_STATE=1
+#   congela o estado para exercitar o fallback sem virada (o verbo loga
+#   em QS_FAKE_LOG mas nao muda QS_FAKE_BT_STATE).
 echo "$*" >> "${QS_FAKE_LOG:-/dev/null}"
 if [ "$1" = "--timeout" ]; then shift 2; fi
 state_file="${QS_FAKE_BT_STATE:-}"

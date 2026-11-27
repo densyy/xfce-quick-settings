@@ -20,8 +20,8 @@ void net_update_tiles (QuickSettings *qs);
  * Safe to call on every popup open; never blocks the main loop. */
 void net_refresh_bt_tile (QuickSettings *qs);
 /* Releases the Wi-Fi saved-profile cache + BT device cache/busy map and
- * flags in-flight BtLink chains cancelled (drops pending verify
- * timeouts). Idempotent; safe to call twice. Wired from plugin free-data
+ * flags in-flight BtLink chains cancelled (drops pending signal
+ * subscriptions and fallback timeouts). Idempotent; safe to call twice. Wired from plugin free-data
  * (quick_settings_free in qs-plugin.c) before destroying the popup.
  * Fallback: per-module destructors also free the caches at unload. */
 void net_cleanup (void);
