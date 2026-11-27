@@ -1,35 +1,23 @@
-/* qs-notify-store.c — notification history store (sqlite) movido de qs-notify.c.
- * Movimento puro; poll/rows/build permanecem em qs-notify.c. */
+/* qs-notify-store.c: notification history store (sqlite). */
 
 #include "qs-notify-store.h"
 
 #include <sqlite3.h>
 #include <sys/stat.h>
 
-/* COUNT + MAX(timestamp) em 1 query (tile rápido, sem parse de 30 rows). */
+static sqlite3 *notify_db_open_ro (gchar **path_out);
+
+/* COUNT + MAX(timestamp) in 1 query (fast tile, no 30-row parse). */
 gboolean
 notify_db_signature (gint   *count_out,
                      gint64 *max_out)
 {
-  gchar       *path = notify_db_path ();
-  sqlite3     *db = NULL;
+  sqlite3     *db = notify_db_open_ro (NULL);
   sqlite3_stmt *stmt = NULL;
   gboolean     ok = FALSE;
 
-  if (!g_file_test (path, G_FILE_TEST_EXISTS))
-    {
-      g_free (path);
-      return FALSE;
-    }
-  if (sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
-    {
-      g_free (path);
-      if (db != NULL)
-        sqlite3_close (db);
-      return FALSE;
-    }
-  sqlite3_busy_timeout (db, 1000);
-  g_free (path);
+  if (db == NULL)
+    return FALSE;
   if (sqlite3_prepare_v2 (db,
                           "SELECT COUNT(*), MAX(timestamp) FROM notifications;",
                           -1, &stmt, NULL) == SQLITE_OK
@@ -60,13 +48,39 @@ notice_free (gpointer data)
   g_free (n);
 }
 
-/* Path to the xfce4-notifyd history database (may not exist).
- * Uses XDG cache dir (usually ~/.cache), not hardcoded HOME/.cache. */
+/* Path to the xfce4-notifyd history database (may not exist). */
 gchar *
 notify_db_path (void)
 {
   return g_build_filename (g_get_user_cache_dir (), "xfce4",
                            "notifyd", "log.sqlite", NULL);
+}
+
+/* Opens the history database read-only; NULL when missing/unreadable. */
+static sqlite3 *
+notify_db_open_ro (gchar **path_out)
+{
+  gchar *path = notify_db_path ();
+  sqlite3 *db = NULL;
+
+  if (!g_file_test (path, G_FILE_TEST_EXISTS))
+    {
+      g_free (path);
+      return NULL;
+    }
+  if (sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
+    {
+      g_free (path);
+      if (db != NULL)
+        sqlite3_close (db);
+      return NULL;
+    }
+  sqlite3_busy_timeout (db, 1000);
+  if (path_out != NULL)
+    *path_out = path;
+  else
+    g_free (path);
+  return db;
 }
 
 /* Flattens newlines: the list splits rows on '\n', so embedded
@@ -83,31 +97,16 @@ flat_text (const unsigned char *src)
   return s;
 }
 
-/* Newest first, or NULL when the log is missing/unreadable.
- * Reads via libsqlite3 directly: no sqlite3 CLI dependency and no
- * separator-quoting fragility. */
+/* Newest first, or NULL when the log is missing/unreadable. */
 GList *
 list_notices (void)
 {
-  gchar     *path = notify_db_path ();
-  sqlite3   *db = NULL;
+  sqlite3   *db = notify_db_open_ro (NULL);
   sqlite3_stmt *stmt = NULL;
   GList     *notices = NULL;
 
-  if (!g_file_test (path, G_FILE_TEST_EXISTS))
-    {
-      g_free (path);
-      return NULL;
-    }
-  if (sqlite3_open_v2 (path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK)
-    {
-      g_free (path);
-      if (db != NULL)
-        sqlite3_close (db);
-      return NULL;
-    }
-  sqlite3_busy_timeout (db, 1000);
-  g_free (path);
+  if (db == NULL)
+    return NULL;
   if (sqlite3_prepare_v2 (db,
                            "SELECT app_name, summary, body, timestamp "
                           "FROM notifications "

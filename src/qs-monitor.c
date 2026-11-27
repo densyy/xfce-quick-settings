@@ -1,27 +1,3 @@
-/* qs-monitor.c — external monitors (xrandr) responsibility.
- *
- * TU própria (Makefile SRC); compartilha a fachada qs-display.h.
- * Usa night_update_sub (qs-nightlight.c).
- *
- * Perf: um único g_strsplit por dump. O snapshot (QsDisplaySnap) é
- * construído em uma passada e reutilizado por query/seleção/power, em vez
- * de parse_monitors/parse_modes/monitor_header/count_displays darem 3-5
- * splits do mesmo dump. Usa night_update_sub (definido em
- * qs-nightlight.c, incluído antes deste arquivo).
- *
- * Query:  xrandr --query            (connected outputs + their modes)
- * Mode:   xrandr --output MON --mode MODE
- * Scale:  xrandr --output MON --scale IxI (I = 1 / factor)
- * --scale chosen over --scale-from: --scale-from would need per-monitor
- * pixel math to express the same factor. xrandr accepts any positive
- * factor, so every entry in SCALE_FACTORS is valid (nothing to filter).
- * The UI factor is XFCE-style (bigger = zoom in); xrandr --scale grows
- * the framebuffer (bigger = zoom out), so the inverse is sent
- * (1.25 -> "0.8x0.8").
- * Without xrandr every combo shows "unavailable" and stays insensitive.
- * Queries run via run_command_async; applies via spawn_command: the
- * panel never blocks.
- */
 #include "qs-display.h"
 #include "qs-monitor-data.h"
 #include "qs-ui.h"
@@ -29,12 +5,6 @@
 
 #include <string.h>
 
-/* Syncs the "Monitor on/off" switch to the selected monitor. Caller holds
- * qs->updating (programmatic set must not fire the apply handler).
- * Single-display guard: turning off the only active output would black
- * out the session, so the switch goes insensitive with a tooltip + status
- * of "Cannot disable the only display". An output that is already off
- * stays sensitive so it can always be turned back on. */
 static void
 display_update_power_switch (QuickSettings *qs,
                              QsMonInfo     *sel_mon,
@@ -100,7 +70,6 @@ make_combo_row (GtkWidget   *grid,
   return combo;
 }
 
-/* Fill a text combo (id == label); empty list -> single insensitive row. */
 static void
 fill_combo (GtkWidget   *combo,
             GList       *items,
@@ -146,8 +115,16 @@ display_update_sub (QuickSettings *qs,
   g_free (text);
 }
 
-/* Everything "unavailable": no xrandr on PATH (or query failed hard at
- * tile-refresh time). Mirrors the audio "No audio backend" pattern. */
+static void
+mon_switch_off (QuickSettings *qs)
+{
+  if (qs->mon_switch == NULL)
+    return;
+  gtk_switch_set_active (GTK_SWITCH (qs->mon_switch), FALSE);
+  gtk_widget_set_sensitive (qs->mon_switch, FALSE);
+  gtk_widget_set_tooltip_text (qs->mon_switch, "Monitor on/off");
+}
+
 static void
 display_unavailable (QuickSettings *qs)
 {
@@ -155,12 +132,7 @@ display_unavailable (QuickSettings *qs)
   fill_combo (qs->mon_combo, NULL, NULL, "unavailable");
   fill_combo (qs->mode_combo, NULL, NULL, "unavailable");
   fill_combo (qs->scale_combo, NULL, NULL, "unavailable");
-  if (qs->mon_switch != NULL)
-    {
-      gtk_switch_set_active (GTK_SWITCH (qs->mon_switch), FALSE);
-      gtk_widget_set_sensitive (qs->mon_switch, FALSE);
-      gtk_widget_set_tooltip_text (qs->mon_switch, "Monitor on/off");
-    }
+  mon_switch_off (qs);
   gtk_label_set_text (GTK_LABEL (qs->display_status),
                        "xrandr not found (unavailable).");
   gtk_label_set_text (GTK_LABEL (qs->display_sub), "unavailable");
@@ -187,6 +159,57 @@ fill_scale_combo (QuickSettings *qs)
 }
 
 static void
+query_fail (QuickSettings *qs)
+{
+  fill_combo (qs->mon_combo, NULL, NULL, "No displays");
+  fill_combo (qs->mode_combo, NULL, NULL, "No displays");
+  fill_combo (qs->scale_combo, NULL, NULL, "No displays");
+  mon_switch_off (qs);
+  gtk_label_set_text (GTK_LABEL (qs->display_status),
+                       "Could not query displays.");
+  display_update_sub (qs, NULL, NULL);
+  qs->updating = FALSE;
+  qs_unref (qs);
+}
+
+static void
+query_fill_selection (QuickSettings *qs,
+                      QsDisplaySnap *snap,
+                      const gchar   *sel)
+{
+  QsMonInfo *sel_mon = qs_snap_find (snap, sel);
+  const gchar *shown_mode = NULL;
+
+  if (sel_mon != NULL)
+    {
+      shown_mode = (sel_mon->current != NULL) ? sel_mon->current
+                   : (sel_mon->modes != NULL
+                      ? (const gchar *) sel_mon->modes->data : NULL);
+      fill_combo (qs->mode_combo, sel_mon->modes, shown_mode, "No modes");
+    }
+  else
+    fill_combo (qs->mode_combo, NULL, NULL, "No modes");
+  fill_scale_combo (qs);
+  gtk_label_set_text (GTK_LABEL (qs->display_status), NULL);
+  if (sel_mon != NULL && sel_mon->active)
+    display_update_sub (qs, sel, shown_mode);
+  else
+    display_update_sub (qs, sel, "Off");
+  display_update_power_switch (qs, sel_mon, snap->n_active);
+}
+
+static void
+query_paint_no_selection (QuickSettings *qs)
+{
+  fill_combo (qs->mode_combo, NULL, NULL, "No displays");
+  fill_combo (qs->scale_combo, NULL, NULL, "No displays");
+  mon_switch_off (qs);
+  gtk_label_set_text (GTK_LABEL (qs->display_status),
+                       "No connected displays.");
+  display_update_sub (qs, NULL, NULL);
+}
+
+static void
 display_query_done (const gchar *output,
                     const gchar *errout,
                     gboolean     ok,
@@ -196,8 +219,6 @@ display_query_done (const gchar *output,
   gchar         *prev;
   gchar         *sel = NULL;
   QsDisplaySnap *snap = NULL;
-  QsMonInfo     *sel_mon = NULL;
-  const gchar   *shown_mode;
   GList         *names = NULL;
   GList         *l;
 
@@ -212,27 +233,13 @@ display_query_done (const gchar *output,
 
   if (!ok || output == NULL || *output == '\0')
     {
-      fill_combo (qs->mon_combo, NULL, NULL, "No displays");
-      fill_combo (qs->mode_combo, NULL, NULL, "No displays");
-      fill_combo (qs->scale_combo, NULL, NULL, "No displays");
-      if (qs->mon_switch != NULL)
-        {
-          gtk_switch_set_active (GTK_SWITCH (qs->mon_switch), FALSE);
-          gtk_widget_set_sensitive (qs->mon_switch, FALSE);
-          gtk_widget_set_tooltip_text (qs->mon_switch, "Monitor on/off");
-        }
-      gtk_label_set_text (GTK_LABEL (qs->display_status),
-                           "Could not query displays.");
-      display_update_sub (qs, NULL, NULL);
-      qs->updating = FALSE;
-      qs_unref (qs);
+      query_fail (qs);
       return;
     }
 
   g_free (qs->display_last);
   qs->display_last = g_strdup (output);
 
-  /* Parse único do dump; tudo abaixo reusa o snapshot. */
   snap = qs_display_snap_new (output);
 
   prev = g_strdup (gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo)));
@@ -257,44 +264,9 @@ display_query_done (const gchar *output,
   g_list_free (names);
 
   if (sel != NULL)
-    {
-      sel_mon = qs_snap_find (snap, sel);
-      shown_mode = NULL;
-      if (sel_mon != NULL)
-        {
-          shown_mode = (sel_mon->current != NULL) ? sel_mon->current
-                       : (sel_mon->modes != NULL
-                          ? (const gchar *) sel_mon->modes->data : NULL);
-          fill_combo (qs->mode_combo, sel_mon->modes, shown_mode, "No modes");
-        }
-      else
-        {
-          fill_combo (qs->mode_combo, NULL, NULL, "No modes");
-        }
-
-      fill_scale_combo (qs);
-
-      gtk_label_set_text (GTK_LABEL (qs->display_status), NULL);
-      if (sel_mon != NULL && sel_mon->active)
-        display_update_sub (qs, sel, shown_mode);
-      else
-        display_update_sub (qs, sel, "Off");
-      display_update_power_switch (qs, sel_mon, snap->n_active);
-    }
+    query_fill_selection (qs, snap, sel);
   else
-    {
-      fill_combo (qs->mode_combo, NULL, NULL, "No displays");
-      fill_combo (qs->scale_combo, NULL, NULL, "No displays");
-      if (qs->mon_switch != NULL)
-        {
-          gtk_switch_set_active (GTK_SWITCH (qs->mon_switch), FALSE);
-          gtk_widget_set_sensitive (qs->mon_switch, FALSE);
-          gtk_widget_set_tooltip_text (qs->mon_switch, "Monitor on/off");
-        }
-      gtk_label_set_text (GTK_LABEL (qs->display_status),
-                           "No connected displays.");
-      display_update_sub (qs, NULL, NULL);
-    }
+    query_paint_no_selection (qs);
 
   g_free (sel);
   qs_display_snap_free (snap);
@@ -348,12 +320,7 @@ on_mon_changed (GtkComboBox *combo,
           : (sel_mon->modes != NULL
              ? (const gchar *) sel_mon->modes->data : NULL);
   fill_combo (qs->mode_combo, sel_mon->modes, shown, "No modes");
-  /* Scale has no per-monitor cache in --query: reset to default like
-   * display_query_done, so switching monitors never shows a stale
-   * factor from the previous selection. Under updating, no apply fires. */
   fill_scale_combo (qs);
-  /* Fresh selection clears transient status; the power-switch sync below
-   * re-applies the single-display guard message when it still applies. */
   gtk_label_set_text (GTK_LABEL (qs->display_status), NULL);
   if (sel_mon->active)
     display_update_sub (qs, id, shown);
@@ -393,9 +360,6 @@ on_mode_changed (GtkComboBox *combo,
   display_update_sub (qs, mon, mode);
 }
 
-/* XFCE-style scale (bigger = zoom in) is the inverse of xrandr --scale
- * (bigger framebuffer = zoom out), so send I = 1 / factor. Fixed table
- * keeps the command deterministic and testable. */
 static const gchar *
 scale_inverse (const gchar *factor)
 {
@@ -438,20 +402,56 @@ on_scale_changed (GtkComboBox *combo,
   g_free (cmd);
 }
 
-/* Monitor on/off (async apply + refresh):
- * ON  = xrandr --output MON --auto (preferred mode, always valid)
- * OFF = xrandr --output MON --off
- * The apply runs via run_command_async (worker thread, done() back on the
- * main loop): the panel never blocks. On success the cached --query is
- * refreshed, which resyncs combos, switch, tile sub and status. On
- * failure the switch is reverted in place and the error is shown. */
-
 typedef struct
 {
   QuickSettings *qs;
   gchar         *mon;
   gboolean       turn_on;
 } MonPower;
+
+static gchar *
+mon_error_detail (const gchar *errout)
+{
+  gchar *detail;
+
+  if (errout == NULL || *errout == '\0')
+    return NULL;
+  detail = g_strdup (errout);
+  detail[strcspn (detail, "\n")] = '\0';
+  g_strstrip (detail);
+  if (*detail == '\0')
+    {
+      g_free (detail);
+      return NULL;
+    }
+  return detail;
+}
+
+static void
+mon_power_fail (QuickSettings *qs,
+                MonPower      *c,
+                gchar         *detail)
+{
+  qs->updating = TRUE;
+  if (qs->mon_switch != NULL)
+    gtk_switch_set_active (GTK_SWITCH (qs->mon_switch), !c->turn_on);
+  qs->updating = FALSE;
+  if (detail != NULL)
+    {
+      gchar *msg = g_strdup_printf ("Failed to turn monitor %s: %s",
+                                    c->turn_on ? "on" : "off", detail);
+
+      gtk_label_set_text (GTK_LABEL (qs->display_status), msg);
+      g_free (msg);
+      g_free (detail);
+    }
+  else
+    {
+      gtk_label_set_text (GTK_LABEL (qs->display_status),
+                          c->turn_on ? "Failed to turn monitor on."
+                                     : "Failed to turn monitor off.");
+    }
+}
 
 static void
 mon_power_done (const gchar *output,
@@ -478,40 +478,7 @@ mon_power_done (const gchar *output,
       display_load_async (qs);
     }
   else
-    {
-      gchar *detail = NULL;
-
-      if (errout != NULL && *errout != '\0')
-        {
-          detail = g_strdup (errout);
-          detail[strcspn (detail, "\n")] = '\0';
-          g_strstrip (detail);
-          if (*detail == '\0')
-            {
-              g_free (detail);
-              detail = NULL;
-            }
-        }
-      qs->updating = TRUE;
-      if (qs->mon_switch != NULL)
-        gtk_switch_set_active (GTK_SWITCH (qs->mon_switch), !c->turn_on);
-      qs->updating = FALSE;
-      if (detail != NULL)
-        {
-          gchar *msg = g_strdup_printf ("Failed to turn monitor %s: %s",
-                                        c->turn_on ? "on" : "off", detail);
-
-          gtk_label_set_text (GTK_LABEL (qs->display_status), msg);
-          g_free (msg);
-          g_free (detail);
-        }
-      else
-        {
-          gtk_label_set_text (GTK_LABEL (qs->display_status),
-                              c->turn_on ? "Failed to turn monitor on."
-                                         : "Failed to turn monitor off.");
-        }
-    }
+    mon_power_fail (qs, c, mon_error_detail (errout));
   g_free (c->mon);
   qs_unref (qs);
   g_free (c);
@@ -544,9 +511,7 @@ mon_set_power_async (QuickSettings *qs,
   g_free (cmd);
 }
 
-/* Same GtkSwitch pattern as Wi-Fi/Bluetooth (notify::active + updating
- * guard). Re-checks the single-display guard: a stale query (second
- * monitor unplugged meanwhile) must not black out the session. */
+/* Same switch pattern as Wi-Fi/BT; re-checks the single-display guard. */
 void
 on_mon_power_changed (GObject    *obj,
                       GParamSpec *pspec,
@@ -569,7 +534,7 @@ on_mon_power_changed (GObject    *obj,
     return;
   if (!on && qs->display_last != NULL)
     {
-      /* Um parse do cache cobre count + active (antes dois). */
+      /* Um parse do cache: cobre count + active. */
       snap = qs_display_snap_new (qs->display_last);
       sel_mon = qs_snap_find (snap, mon);
       if (sel_mon != NULL && sel_mon->active && snap->n_active <= 1)
@@ -590,8 +555,6 @@ on_mon_power_changed (GObject    *obj,
   mon_set_power_async (qs, mon, on);
 }
 
-/* Tile sensitivity + subtitle for external monitors. Without xrandr the
- * page stays "unavailable"; otherwise (re)probes asynchronously. */
 void
 display_refresh_tile (QuickSettings *qs)
 {

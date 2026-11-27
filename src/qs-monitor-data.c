@@ -73,10 +73,7 @@ qs_display_snap_free (QsDisplaySnap *snap)
   g_free (snap);
 }
 
-/* Geometry token ("1920x1080+0+0") in a header means the output is
- * actively driving pixels. After "--off" the header keeps "connected"
- * but loses the geometry (modes stay listed, '*' disappears), so the
- * header alone tells on from off. */
+/* Geometry token ("1920x1080+0+0") means the output drives pixels. */
 gboolean
 header_has_geometry (const gchar *header)
 {
@@ -101,9 +98,56 @@ header_has_geometry (const gchar *header)
   return active;
 }
 
-/* Um único g_strsplit do dump; uma passada constrói monitores + modos +
- * current + active + contadores. Semântica igual aos antigos
- * parse_monitors/parse_modes/monitor_header/count_displays. */
+static void
+snap_add_mode (QsMonInfo *cur,
+               const gchar *line)
+{
+  if (line == NULL || cur == NULL)
+    return;
+  gchar *s = g_strdup (line);
+  gchar *end;
+
+  g_strstrip (s);
+  end = strpbrk (s, " \t");
+  if (end != NULL)
+    *end = '\0';
+  if (valid_mode (s))
+    {
+      cur->modes = g_list_append (cur->modes, g_strdup (s));
+      if (cur->current == NULL && strchr (line, '*') != NULL)
+        cur->current = g_strdup (s);
+    }
+  g_free (s);
+}
+
+static QsMonInfo *
+snap_add_header (QsDisplaySnap *snap,
+                 const gchar   *line)
+{
+  gchar *s = g_strdup (line);
+  gchar **tok;
+  gint t;
+  gboolean connected = FALSE;
+  QsMonInfo *m = NULL;
+
+  g_strstrip (s);
+  tok = g_strsplit_set (s, " \t", -1);
+  for (t = 1; tok[t] != NULL; t++)
+    if (g_strcmp0 (tok[t], "connected") == 0)
+      connected = TRUE;
+  if (connected && tok[0] != NULL && valid_monitor_shared (tok[0]))
+    {
+      m = g_new0 (QsMonInfo, 1);
+      m->name = g_strdup (tok[0]);
+      m->header_active = header_has_geometry (line);
+      snap->mons = g_list_append (snap->mons, m);
+    }
+  g_strfreev (tok);
+  g_free (s);
+  return m;
+}
+
+/* One g_strsplit pass builds monitors + modes + current + counters. */
 QsDisplaySnap *
 qs_display_snap_new (const gchar *output)
 {
@@ -123,52 +167,11 @@ qs_display_snap_new (const gchar *output)
         continue;
       if (*line == ' ' || *line == '\t')
         {
-          gchar *s;
-          gchar *end;
-
-          if (cur == NULL)
-            continue;
-          s = g_strdup (line);
-          g_strstrip (s);
-          end = strpbrk (s, " \t");
-          if (end != NULL)
-            *end = '\0';
-          if (valid_mode (s))
-            {
-              cur->modes = g_list_append (cur->modes, g_strdup (s));
-              if (cur->current == NULL && strchr (line, '*') != NULL)
-                cur->current = g_strdup (s);
-            }
-          g_free (s);
+          if (cur != NULL)
+            snap_add_mode (cur, line);
         }
       else
-        {
-          gchar *s = g_strdup (line);
-          gchar **tok;
-          gint t;
-          gboolean connected = FALSE;
-
-          g_strstrip (s);
-          tok = g_strsplit_set (s, " \t", -1);
-          for (t = 1; tok[t] != NULL; t++)
-            if (g_strcmp0 (tok[t], "connected") == 0)
-              connected = TRUE;
-          if (connected && tok[0] != NULL && valid_monitor_shared (tok[0]))
-            {
-              QsMonInfo *m = g_new0 (QsMonInfo, 1);
-
-              m->name = g_strdup (tok[0]);
-              m->header_active = header_has_geometry (line);
-              snap->mons = g_list_append (snap->mons, m);
-              cur = m;
-            }
-          else
-            {
-              cur = NULL;
-            }
-          g_strfreev (tok);
-          g_free (s);
-        }
+        cur = snap_add_header (snap, line);
     }
   g_strfreev (lines);
 

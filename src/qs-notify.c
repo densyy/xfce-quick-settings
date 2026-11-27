@@ -6,19 +6,13 @@
 #include <sqlite3.h>
 #include <sys/stat.h>
 
-/* Live refresh: dir monitor (sqlite uses rename/journal, so the file
- * itself can't be watched reliably) + 3s poll fallback while visible. */
+/* Live refresh: dir monitor + 3 s poll fallback while visible. */
 #define NOTIFY_POLL_S 3
 #define NOTIFY_DEBOUNCE_MS 500
 #define NOTIFY_DATA_MON "qs-notify-monitor"
 #define NOTIFY_DATA_POLL "qs-notify-poll"
 #define NOTIFY_DATA_DEB "qs-notify-debounce"
 
-/* ---- cache estático interno: evita COUNT(*)/rebuild sem mudança ----
- * Tile usa stat(mtime+size) como fast-path: sem sqlite quando o arquivo
- * não mudou. Lista só reconstrói 30 rows quando count/max(timestamp)
- * diverge do último fill. Poll só com a página "notices" visível
- * (start/stop no visible-child + show/hide). */
 static gint notify_cached_count = -1;
 static gint64 notify_cached_max = -1;
 static time_t notify_cached_mtime = 0;
@@ -46,11 +40,6 @@ notify_set_tile_count (QuickSettings *qs,
     }
 }
 
-/* Collapsed/expanded state for compact notice rows.
- * Each expandable row stores its single preview label ("app • body")
- * under NOTICE_BODY_KEY and a 0/1 flag under NOTICE_EXPANDED_KEY.
- * Only "button-press-event" toggles (not "activate"): a click would
- * otherwise fire both and cancel itself out. */
 #define NOTICE_BODY_KEY "qs-notice-body"
 #define NOTICE_EXPANDED_KEY "qs-notice-expanded"
 
@@ -102,43 +91,21 @@ on_notice_row_button_press (GtkWidget      *row,
   return FALSE;
 }
 
-/* Compact collapsed row: line 1 = bold summary (1 line, ellipsis) + time
- * pinned right; line 2 = "app • body" truncated to 1 line with ellipsis
- * (app alone when there is no body). Clicking an expandable row toggles
- * the full wrapped body. Timestamp/counter/Clear/refresh live elsewhere
- * and are untouched. */
 static GtkWidget *
-make_notice_row (Notice *n)
+notice_header_new (Notice   *n,
+                  gboolean *title_is_app_out)
 {
-  GtkWidget *row = gtk_list_box_row_new ();
-  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL,
-                                 QS_TIGHT_GAP / 2);
   GtkWidget *header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
                                    QS_INNER_GAP);
   GtkWidget *title;
   GtkWidget *time_label;
-  GtkWidget *preview;
-  gchar     *time;
-  gchar     *preview_text;
+  gchar *time;
   const gchar *title_text;
-  gboolean   has_body;
-  gboolean   title_is_app;
 
-  ui_add_class (row, "qs-card");
-  gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
-  gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
-  gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
-  gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
-  /* Tighter than QS_CONTENT_PAD (10) so a collapsed row stays ~2 lines. */
-  gtk_container_set_border_width (GTK_CONTAINER (vbox), 6);
-
-  /* Bold summary with the time pinned to the right.
-   * Plain text (no markup escape): GtkLabel shows text literally,
-   * so pre-escaped "&amp;" would leak to the UI. */
   title_text = (n->summary != NULL && *n->summary != '\0')
                ? n->summary
                : (n->app != NULL && *n->app != '\0' ? n->app : "Notification");
-  title_is_app = (g_strcmp0 (title_text, n->app) == 0);
+  *title_is_app_out = (g_strcmp0 (title_text, n->app) == 0);
   title = gtk_label_new (title_text);
   ui_add_class (title, "qs-title");
   gtk_widget_set_halign (title, GTK_ALIGN_START);
@@ -151,9 +118,18 @@ make_notice_row (Notice *n)
   g_free (time);
   gtk_box_pack_start (GTK_BOX (header), title, TRUE, TRUE, 0);
   gtk_box_pack_start (GTK_BOX (header), time_label, FALSE, FALSE, 0);
-  gtk_box_pack_start (GTK_BOX (vbox), header, FALSE, FALSE, 0);
+  return header;
+}
 
-  has_body = (n->body != NULL && *n->body != '\0');
+static GtkWidget *
+notice_preview_new (Notice   *n,
+                    gboolean  title_is_app,
+                    gboolean *has_body_out)
+{
+  GtkWidget *preview;
+  gchar *preview_text;
+  gboolean has_body = (n->body != NULL && *n->body != '\0');
+
   if (has_body && !title_is_app && n->app != NULL && *n->app != '\0')
     preview_text = g_strdup_printf ("%s \342\200\242 %s", n->app, n->body);
   else if (has_body)
@@ -168,6 +144,28 @@ make_notice_row (Notice *n)
   gtk_label_set_line_wrap (GTK_LABEL (preview), TRUE);
   gtk_label_set_lines (GTK_LABEL (preview), 1);
   gtk_label_set_ellipsize (GTK_LABEL (preview), PANGO_ELLIPSIZE_END);
+  *has_body_out = has_body;
+  return preview;
+}
+
+static GtkWidget *
+make_notice_row (Notice *n)
+{
+  GtkWidget *row = gtk_list_box_row_new ();
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL,
+                                 QS_TIGHT_GAP / 2);
+  gboolean title_is_app = FALSE;
+  gboolean has_body = FALSE;
+  GtkWidget *header = notice_header_new (n, &title_is_app);
+  GtkWidget *preview = notice_preview_new (n, title_is_app, &has_body);
+
+  ui_add_class (row, "qs-card");
+  gtk_widget_set_margin_top (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_bottom (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_start (row, QS_TIGHT_GAP);
+  gtk_widget_set_margin_end (row, QS_TIGHT_GAP);
+  gtk_container_set_border_width (GTK_CONTAINER (vbox), 6);
+  gtk_box_pack_start (GTK_BOX (vbox), header, FALSE, FALSE, 0);
   gtk_box_pack_start (GTK_BOX (vbox), preview, FALSE, FALSE, 0);
 
   if (has_body)

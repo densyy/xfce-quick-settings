@@ -1,19 +1,3 @@
-/* qs-brightness.c — backlight/brightness responsibility.
- *
- * TU própria (Makefile SRC); compartilha a fachada qs-display.h com
- * qs-display.c (seção) / qs-nightlight.c / qs-monitor.c.
- *
- * Perf:
- * - display_refresh_brightness nunca faz spawn síncrono na UI: backend
- *   sysfs lê arquivos (rápido, sem spawn) direto; brightnessctl/xbacklight/
- *   xrandr vão via run_command_async (worker thread, volta no main loop).
- *   Em regime só 1 spawn em background (antes até 4 sync na UI).
- * - Backend + device + output xrandr em cache (só PATH/readdir uma vez).
- * - on_brightness_changed com debounce (~70ms): arrastar o slider agenda
- *   um apply, não um spawn por tick. Setter nunca roda `xrandr --verbose`
- *   síncrono por tick (usa output em cache; miss vai via async).
- * - atoi substituído por g_ascii_strtoull/strtod com checagem.
- */
 #include "qs-display.h"
 #include "qs-brightness.h"
 #include "qs-ui.h"

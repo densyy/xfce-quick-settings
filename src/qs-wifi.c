@@ -1,18 +1,9 @@
-/* qs-wifi.c — Wi-Fi backend (nmcli) + Wi-Fi page.
- * TU própria (Makefile SRC); fachada em qs-net.h (qs-net.c delega). */
-
 #include "qs-core.h"
 #include "qs-net.h"
 #include "qs-ui.h"
 #include "qs-util.h"
 #include "qs-cache.h"
 #include "qs-wifi-backend.h"
-
-/* --- Saved-profile cache (avoids `nmcli connection show` on UI path) ---
- * Dialog path (row click) uses the cache only: unknown/stale SSIDs are
- * treated as unsaved (password prompt, the safe default). The connect
- * worker re-queries synchronously off the UI thread. TTL 60s. */
-
 #define WIFI_SAVED_TTL_SECS 60
 
 static GHashTable *wifi_saved_set = NULL;
@@ -42,8 +33,7 @@ wifi_saved_cache_valid_locked (void)
          < ((gint64) WIFI_SAVED_TTL_SECS * G_USEC_PER_SEC);
 }
 
-/* WORKER ONLY: rebuilds the set from `nmcli connection show`. Holds no
- * lock while spawning; swaps the table under lock. */
+/* WORKER ONLY: rebuilds the set; swaps the table under lock. */
 static void
 wifi_saved_refresh_sync (void)
 {
@@ -241,10 +231,7 @@ wifi_patch_row (GtkWidget     *row,
       else if (GTK_IS_LABEL (k->data))
         {
           labels_seen++;
-          if (labels_seen == 1)
-            {
-            }
-          else if (labels_seen == 2 && meta == NULL)
+          if (labels_seen == 2 && meta == NULL)
             meta = GTK_WIDGET (k->data);
         }
     }
@@ -292,6 +279,39 @@ wifi_patch_row (GtkWidget     *row,
 /* Diffs the list box by SSID: patches matching rows, appends new ones in
  * scan order, drops gone SSIDs (and stale placeholders). */
 static void
+wifi_fill_empty (QuickSettings *qs)
+{
+  GList *kids = gtk_container_get_children (GTK_CONTAINER (qs->wifi_list));
+  GList *k;
+
+  for (k = kids; k != NULL; k = k->next)
+    gtk_widget_destroy (GTK_WIDGET (k->data));
+  g_list_free (kids);
+  gtk_container_add (GTK_CONTAINER (qs->wifi_list),
+                     make_placeholder_row (qs->wifi_on
+                                           ? "No networks found."
+                                           : "Wi-Fi is off."));
+  gtk_widget_show_all (qs->wifi_list);
+}
+
+static void
+wifi_sync_sub (QuickSettings *qs,
+               const gchar   *active_ssid)
+{
+  g_free (qs->wifi_ssid);
+  if (active_ssid != NULL)
+    {
+      qs->wifi_ssid = g_strdup (active_ssid);
+      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), active_ssid);
+    }
+  else
+    {
+      qs->wifi_ssid = NULL;
+      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "Not connected");
+    }
+}
+
+static void
 wifi_fill_list (QuickSettings *qs,
                 GList         *nets)
 {
@@ -304,17 +324,7 @@ wifi_fill_list (QuickSettings *qs,
 
   if (nets == NULL)
     {
-      GList *kids = gtk_container_get_children (GTK_CONTAINER (qs->wifi_list));
-      GList *k;
-
-      for (k = kids; k != NULL; k = k->next)
-        gtk_widget_destroy (GTK_WIDGET (k->data));
-      g_list_free (kids);
-      gtk_container_add (GTK_CONTAINER (qs->wifi_list),
-                         make_placeholder_row (qs->wifi_on
-                                               ? "No networks found."
-                                               : "Wi-Fi is off."));
-      gtk_widget_show_all (qs->wifi_list);
+      wifi_fill_empty (qs);
       return;
     }
 
@@ -351,13 +361,9 @@ wifi_fill_list (QuickSettings *qs,
       WifiNet   *net = nl->data;
       GtkWidget *row = g_hash_table_lookup (existing, net->ssid);
 
+      /* Patched in place; GTK3 GtkListBox has no reorder API. */
       if (row != NULL)
-        {
-          /* Patched in place; kept at its current position (GTK3
-           * GtkListBox has no reorder API — order refreshes on the
-           * next full change, state/focus never flickers). */
-          wifi_patch_row (row, net);
-        }
+        wifi_patch_row (row, net);
       else
         {
           row = wifi_make_row (net);
@@ -367,17 +373,7 @@ wifi_fill_list (QuickSettings *qs,
   g_hash_table_destroy (wanted);
   g_hash_table_destroy (existing);
 
-  g_free (qs->wifi_ssid);
-  if (active_ssid != NULL)
-    {
-      qs->wifi_ssid = g_strdup (active_ssid);
-      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), active_ssid);
-    }
-  else
-    {
-      qs->wifi_ssid = NULL;
-      gtk_label_set_text (GTK_LABEL (qs->wifi_sub), "Not connected");
-    }
+  wifi_sync_sub (qs, active_ssid);
   gtk_widget_show_all (qs->wifi_list);
 }
 
@@ -458,6 +454,19 @@ wifi_load_idle (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+static gboolean
+wifi_spawn (const gchar *name,
+             GThreadFunc  func,
+             gpointer     data)
+{
+  GThread *t = g_thread_try_new (name, func, data, NULL);
+
+  if (t == NULL)
+    return FALSE;
+  g_thread_unref (t);
+  return TRUE;
+}
+
 static void
 wifi_load_async (QuickSettings *qs,
                  gboolean       rescan)
@@ -475,18 +484,12 @@ wifi_load_async (QuickSettings *qs,
   w = g_new0 (WifiLoad, 1);
   w->qs = qs;
   w->rescan = rescan;
-  {
-    GThread *t = g_thread_try_new ("qs-wifi", wifi_load_thread, w, NULL);
-
-    if (t == NULL)
-      {
-        qs->scanning_wifi = FALSE;
-        qs_unref (qs);
-        g_free (w);
-      }
-    else
-      g_thread_unref (t);
-  }
+  if (!wifi_spawn ("qs-wifi", wifi_load_thread, w))
+    {
+      qs->scanning_wifi = FALSE;
+      qs_unref (qs);
+      g_free (w);
+    }
 }
 
 /* Async connect: saved-profile decision + nmcli run in the worker. */
@@ -504,39 +507,39 @@ typedef struct
 
 static gboolean wifi_connect_idle (gpointer data);
 
+static gchar *
+wifi_build_connect_cmd (WifiConnect *c,
+                        gboolean     saved)
+{
+  gchar *qssid = g_shell_quote (c->ssid);
+  gchar *cmd;
+
+  if (c->have_password && !saved)
+    {
+      gchar *qpwd = g_shell_quote (c->password != NULL ? c->password
+                                                       : "");
+
+      cmd = g_strdup_printf ("nmcli device wifi connect %s password %s",
+                             qssid, qpwd);
+      g_free (qpwd);
+    }
+  else if (saved)
+    cmd = g_strdup_printf ("nmcli connection up %s", qssid);
+  else
+    cmd = g_strdup_printf ("nmcli device wifi connect %s", qssid);
+  g_free (qssid);
+  return cmd;
+}
+
 static gpointer
 wifi_connect_thread (gpointer data)
 {
   WifiConnect *c = data;
-  gchar       *qssid = g_shell_quote (c->ssid);
-  gchar       *cmd = NULL;
+  gchar       *cmd;
   gboolean     saved = wifi_saved_query_sync (c->ssid);
   GError      *error = NULL;
 
-  if (c->have_password)
-    {
-      if (saved)
-        {
-          cmd = g_strdup_printf ("nmcli connection up %s", qssid);
-        }
-      else
-        {
-          gchar *qpwd = g_shell_quote (c->password != NULL ? c->password
-                                                           : "");
-
-          cmd = g_strdup_printf ("nmcli device wifi connect %s password %s",
-                                 qssid, qpwd);
-          g_free (qpwd);
-        }
-    }
-  else
-    {
-      if (saved)
-        cmd = g_strdup_printf ("nmcli connection up %s", qssid);
-      else
-        cmd = g_strdup_printf ("nmcli device wifi connect %s", qssid);
-    }
-  g_free (qssid);
+  cmd = wifi_build_connect_cmd (c, saved);
   c->ok = g_spawn_command_line_sync (cmd, &c->output, &c->errout,
                                      NULL, &error);
   if (error != NULL)
@@ -608,19 +611,38 @@ wifi_connect_async (QuickSettings *qs,
     }
   qs_ref (qs);
   gtk_label_set_text (GTK_LABEL (qs->wifi_status), "Connecting…");
-  {
-    GThread *t = g_thread_try_new ("qs-wifi-connect", wifi_connect_thread, c, NULL);
+  if (!wifi_spawn ("qs-wifi-connect", wifi_connect_thread, c))
+    {
+      qs_unref (qs);
+      g_free (c->ssid);
+      g_free (c->password);
+      g_free (c);
+    }
+}
 
-    if (t == NULL)
-      {
-        qs_unref (qs);
-        g_free (c->ssid);
-        g_free (c->password);
-        g_free (c);
-      }
-    else
-      g_thread_unref (t);
-  }
+static void
+wifi_password_dialog (QuickSettings *qs,
+                       const gchar   *ssid)
+{
+  GtkWidget *dlg = gtk_dialog_new_with_buttons ("Wi-Fi password",
+                     GTK_WINDOW (qs->popup),
+                     GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                     "_Cancel", GTK_RESPONSE_CANCEL,
+                     "_Connect", GTK_RESPONSE_ACCEPT,
+                     NULL);
+  GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dlg));
+  GtkWidget *prompt = gtk_label_new (ssid);
+  GtkWidget *entry = gtk_entry_new ();
+
+  gtk_entry_set_visibility (GTK_ENTRY (entry), FALSE);
+  gtk_entry_set_activates_default (GTK_ENTRY (entry), TRUE);
+  gtk_box_pack_start (GTK_BOX (content), prompt, FALSE, FALSE, 6);
+  gtk_box_pack_start (GTK_BOX (content), entry, FALSE, FALSE, 6);
+  gtk_dialog_set_default_response (GTK_DIALOG (dlg), GTK_RESPONSE_ACCEPT);
+  gtk_widget_show_all (dlg);
+  if (gtk_dialog_run (GTK_DIALOG (dlg)) == GTK_RESPONSE_ACCEPT)
+    wifi_connect_async (qs, ssid, gtk_entry_get_text (GTK_ENTRY (entry)));
+  gtk_widget_destroy (dlg);
 }
 
 static void
@@ -640,34 +662,11 @@ on_wifi_row_activated (GtkListBox    *box,
     return;
   secured = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (row),
                                                  "qs-secured"));
-  /* Cache-only lookup (never spawns): stale/unknown SSIDs prompt, the safe
-   * default; the worker re-decides saved vs new off the UI thread. */
+  /* Cache-only lookup: stale/unknown SSIDs prompt, the safe default. */
   if (secured && !wifi_saved_lookup_cached (ssid))
-    {
-      GtkWidget *dlg = gtk_dialog_new_with_buttons ("Wi-Fi password",
-                         GTK_WINDOW (qs->popup),
-                         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                         "_Cancel", GTK_RESPONSE_CANCEL,
-                         "_Connect", GTK_RESPONSE_ACCEPT,
-                         NULL);
-      GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dlg));
-      GtkWidget *prompt = gtk_label_new (ssid);
-      GtkWidget *entry = gtk_entry_new ();
-
-      gtk_entry_set_visibility (GTK_ENTRY (entry), FALSE);
-      gtk_entry_set_activates_default (GTK_ENTRY (entry), TRUE);
-      gtk_box_pack_start (GTK_BOX (content), prompt, FALSE, FALSE, 6);
-      gtk_box_pack_start (GTK_BOX (content), entry, FALSE, FALSE, 6);
-      gtk_dialog_set_default_response (GTK_DIALOG (dlg), GTK_RESPONSE_ACCEPT);
-      gtk_widget_show_all (dlg);
-      if (gtk_dialog_run (GTK_DIALOG (dlg)) == GTK_RESPONSE_ACCEPT)
-        wifi_connect_async (qs, ssid, gtk_entry_get_text (GTK_ENTRY (entry)));
-      gtk_widget_destroy (dlg);
-    }
+    wifi_password_dialog (qs, ssid);
   else
-    {
-      wifi_connect_async (qs, ssid, NULL);
-    }
+    wifi_connect_async (qs, ssid, NULL);
 }
 
 static gboolean
@@ -721,27 +720,29 @@ wifi_show_page (QuickSettings *qs)
   wifi_load_async (qs, FALSE);
 }
 
-/* Cached tile paint: sync-sem-spawn. Reads qs->wifi_on (filled by
- * qs_cache_load) and only touches widgets. ZERO run_command /
- * wifi_enabled_sync here (see T4: nmcli sync left the open path). */
-void
-wifi_update_tile (QuickSettings *qs)
+/* Cached tile paint: sync, no spawn. Reads qs->wifi_on, only touches widgets. */
+static void
+wifi_paint_tile (QuickSettings *qs,
+                 gboolean       on,
+                 gboolean       avail)
 {
-  gboolean avail = command_exists ("nmcli");
-
-  set_tile_active (qs->wifi_tile, qs->wifi_on);
+  set_tile_active (qs->wifi_tile, on);
   gtk_widget_set_sensitive (qs->wifi_tile, avail);
   gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
                       !avail ? "Unavailable"
-                      : qs->wifi_on ? (qs->wifi_ssid != NULL
-                                       && qs->wifi_ssid[0] != '\0'
-                                       ? qs->wifi_ssid : "On")
-                                    : "Off");
+                      : on ? (qs->wifi_ssid != NULL
+                              && qs->wifi_ssid[0] != '\0'
+                              ? qs->wifi_ssid : "On")
+                           : "Off");
 }
 
-/* Async correction probe (mirrors bt_refresh_tile_async in
- * qs-bluetooth.c). Worker runs ONLY command_exists + wifi_enabled_sync
- * (plain-data); all widget/cache work happens in the idle on main. */
+void
+wifi_update_tile (QuickSettings *qs)
+{
+  wifi_paint_tile (qs, qs->wifi_on, command_exists ("nmcli"));
+}
+
+/* Async correction probe. Worker runs only plain-data queries. */
 typedef struct
 {
   QuickSettings *qs;
@@ -756,19 +757,11 @@ wifi_tile_probe_idle (gpointer data)
   WifiTileProbe *p = data;
   QuickSettings *qs = p->qs;
 
-  /* Stale (newer probe issued) or torn-down: drop. A full page load
-   * owns the tile while it runs (updates it on done). */
+  /* Stale or torn-down: drop; a page load owns the tile while running. */
   if (!g_atomic_int_get (&qs->dead) && p->seq == qs->cache_seq && !qs->scanning_wifi)
     {
       qs->wifi_on = p->on;
-      set_tile_active (qs->wifi_tile, p->on);
-      gtk_widget_set_sensitive (qs->wifi_tile, p->avail);
-      gtk_label_set_text (GTK_LABEL (qs->wifi_sub),
-                          !p->avail ? "Unavailable"
-                          : p->on ? (qs->wifi_ssid != NULL
-                                     && qs->wifi_ssid[0] != '\0'
-                                     ? qs->wifi_ssid : "On")
-                                  : "Off");
+      wifi_paint_tile (qs, p->on, p->avail);
       qs_cache_schedule_save (qs);
     }
   g_free (p);
@@ -795,7 +788,6 @@ wifi_refresh_tile_async (QuickSettings *qs)
 {
   WifiTileProbe *p;
 
-  /* Don't race the full page load (wifi_load_async owns the tile). */
   if (qs->scanning_wifi)
     return;
   qs_ref (qs);
@@ -803,20 +795,13 @@ wifi_refresh_tile_async (QuickSettings *qs)
   p = g_new0 (WifiTileProbe, 1);
   p->qs = qs;
   p->seq = qs->cache_seq;
-  {
-    GThread *t = g_thread_try_new ("qs-wifi-tile", wifi_tile_probe_thread, p, NULL);
-
-    if (t == NULL)
-      {
-        qs_unref (qs);
-        g_free (p);
-      }
-    else
-      g_thread_unref (t);
-  }
+  if (!wifi_spawn ("qs-wifi-tile", wifi_tile_probe_thread, p))
+    {
+      qs_unref (qs);
+      g_free (p);
+    }
 }
 
-/* Builds the Wi-Fi sub-page; back_out is left unwired for the facade. */
 void
 wifi_build_page (GtkWidget     *stack,
                  QuickSettings *qs,

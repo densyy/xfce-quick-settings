@@ -1,6 +1,3 @@
-/* qs-bluetooth.c — Bluetooth backend (bluetoothctl) + BT page + tile probe.
- * TU própria (Makefile SRC); fachada em qs-net.h (qs-net.c delega). */
-
 #include "qs-core.h"
 #include "qs-net.h"
 #include "qs-ui.h"
@@ -23,9 +20,6 @@ bt_info_text_flags (const gchar *output,
     *connected = (output != NULL && strstr (output, "Connected: yes") != NULL);
 }
 
-/* --- Bluetooth in-memory cache (a few hours) ---
- * Opening the tab reuses the cache; only Scan forces fresh discovery.
- * Refreshed after every load, patched in place after connect/disconnect. */
 #define BT_CACHE_TTL_SECS (3 * 3600)
 
 static GList   *bt_cache_devs = NULL;
@@ -99,10 +93,7 @@ bt_cache_update (const gchar *mac,
     }
 }
 
-/* Per-MAC single-flight with timeout (main loop only).
- * Old global bt_busy_mac debounced the whole page on one MAC; now each
- * MAC debounces independently and entries expire after 30s so a leaked
- * chain cannot wedge the page forever. */
+/* Per-MAC single-flight with 30 s expiry (main loop only). */
 #define BT_BUSY_TIMEOUT_SECS 30
 
 static GHashTable *bt_busy = NULL; /* mac -> gint64* expiry (monotonic) */
@@ -214,6 +205,66 @@ bt_style_card_row (GtkWidget *row,
   gtk_container_set_border_width (GTK_CONTAINER (content), QS_CONTENT_PAD);
 }
 
+static const gchar *
+bt_state_text (gboolean connected,
+               gboolean paired)
+{
+  if (connected)
+    return "Connected";
+  return paired ? "Paired" : "";
+}
+
+static GtkWidget *
+bt_row_new (const BtDevice *dev)
+{
+  GtkWidget *row = gtk_list_box_row_new ();
+  GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
+  GtkWidget *icon = gtk_image_new_from_icon_name (dev->connected
+                     ? "bluetooth-active-symbolic"
+                     : "bluetooth-symbolic",
+                     GTK_ICON_SIZE_LARGE_TOOLBAR);
+  GtkWidget *name = gtk_label_new (dev->name);
+  GtkWidget *state = gtk_label_new (bt_state_text (dev->connected, dev->paired));
+
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
+  ui_add_class (name, "qs-title");
+  gtk_widget_set_halign (name, GTK_ALIGN_START);
+  gtk_widget_set_hexpand (name, TRUE);
+  gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
+  ui_add_class (state, "qs-sub");
+  gtk_box_pack_start (GTK_BOX (hbox), icon, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (hbox), name, TRUE, TRUE, 0);
+  gtk_box_pack_start (GTK_BOX (hbox), state, FALSE, FALSE, 0);
+  bt_style_card_row (row, hbox);
+  gtk_container_add (GTK_CONTAINER (row), hbox);
+  g_object_set_data_full (G_OBJECT (row), "qs-mac",
+                          g_strdup (dev->mac), g_free);
+  g_object_set_data_full (G_OBJECT (row), "qs-name",
+                          g_strdup (dev->name), g_free);
+  g_object_set_data (G_OBJECT (row), "qs-connected",
+                     GINT_TO_POINTER (dev->connected));
+  g_object_set_data (G_OBJECT (row), "qs-paired",
+                     GINT_TO_POINTER (dev->paired));
+  return row;
+}
+
+static void
+bt_sync_sub (QuickSettings *qs,
+             const gchar   *connected_name,
+             gboolean       have_devs)
+{
+  g_free (qs->bt_connected_name);
+  if (connected_name != NULL)
+    {
+      qs->bt_connected_name = g_strdup (connected_name);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), connected_name);
+      return;
+    }
+  qs->bt_connected_name = NULL;
+  if (have_devs)
+    gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+}
+
 static void
 bt_fill_list (QuickSettings *qs,
               GList         *devs,
@@ -229,56 +280,79 @@ bt_fill_list (QuickSettings *qs,
                        make_placeholder_row (empty_text));
   for (l = devs; l != NULL; l = l->next)
     {
-      BtDevice  *dev = l->data;
-      GtkWidget *row = gtk_list_box_row_new ();
-      GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL,
-                                     QS_INNER_GAP);
-      GtkWidget *icon = gtk_image_new_from_icon_name (dev->connected
-                         ? "bluetooth-active-symbolic"
-                         : "bluetooth-symbolic",
-                         GTK_ICON_SIZE_LARGE_TOOLBAR);
-      GtkWidget *name = gtk_label_new (dev->name);
-      GtkWidget *state;
+      BtDevice *dev = l->data;
 
       if (dev->connected)
         connected_name = dev->name;
-      gtk_image_set_pixel_size (GTK_IMAGE (icon), QS_ROW_ICON_PX);
-      ui_add_class (name, "qs-title");
-      gtk_widget_set_halign (name, GTK_ALIGN_START);
-      gtk_widget_set_hexpand (name, TRUE);
-      gtk_label_set_ellipsize (GTK_LABEL (name), PANGO_ELLIPSIZE_END);
-      state = gtk_label_new (dev->connected ? "Connected"
-                             : dev->paired ? "Paired" : "");
-      ui_add_class (state, "qs-sub");
-      gtk_box_pack_start (GTK_BOX (hbox), icon, FALSE, FALSE, 0);
-      gtk_box_pack_start (GTK_BOX (hbox), name, TRUE, TRUE, 0);
-      gtk_box_pack_start (GTK_BOX (hbox), state, FALSE, FALSE, 0);
-      bt_style_card_row (row, hbox);
-      gtk_container_add (GTK_CONTAINER (row), hbox);
-      g_object_set_data_full (G_OBJECT (row), "qs-mac",
-                              g_strdup (dev->mac), g_free);
-      g_object_set_data_full (G_OBJECT (row), "qs-name",
-                              g_strdup (dev->name), g_free);
-      g_object_set_data (G_OBJECT (row), "qs-connected",
-                         GINT_TO_POINTER (dev->connected));
-      g_object_set_data (G_OBJECT (row), "qs-paired",
-                         GINT_TO_POINTER (dev->paired));
-      gtk_container_add (GTK_CONTAINER (qs->bt_list), row);
+      gtk_container_add (GTK_CONTAINER (qs->bt_list), bt_row_new (dev));
     }
-  g_free (qs->bt_connected_name);
-  if (connected_name != NULL)
+  bt_sync_sub (qs, connected_name, devs != NULL);
+  gtk_widget_show_all (qs->bt_list);
+  bt_filling = FALSE;
+}
+
+static void
+bt_sync_switch_tile (QuickSettings *qs)
+{
+  qs->updating = TRUE;
+  gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), qs->bt_on);
+  qs->updating = FALSE;
+  set_tile_active (qs->bt_tile, qs->bt_on);
+}
+
+static void
+bt_paint_state (QuickSettings *qs,
+                gboolean       powered,
+                GList         *devs)
+{
+  if (qs->bt_controller == NULL)
     {
-      qs->bt_connected_name = g_strdup (connected_name);
-      gtk_label_set_text (GTK_LABEL (qs->bt_sub), connected_name);
+      gtk_label_set_text (GTK_LABEL (qs->bt_status),
+                          command_exists ("bluetoothctl")
+                          ? "No Bluetooth adapter found."
+                          : "Install bluez-utils.");
+      gtk_widget_set_sensitive (qs->bt_switch, FALSE);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), "No adapter");
+      bt_fill_list (qs, NULL, "No adapter.");
+    }
+  else if (!powered)
+    {
+      gtk_label_set_text (GTK_LABEL (qs->bt_status), "Bluetooth is off.");
+      gtk_widget_set_sensitive (qs->bt_switch, TRUE);
+      gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Off");
+      bt_fill_list (qs, NULL, "Turn Bluetooth on to see devices.");
     }
   else
     {
-      qs->bt_connected_name = NULL;
-      if (devs != NULL)
-        gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+      gtk_label_set_text (GTK_LABEL (qs->bt_status), "");
+      gtk_widget_set_sensitive (qs->bt_switch, TRUE);
+      bt_fill_list (qs, devs, "No devices found.");
     }
-  gtk_widget_show_all (qs->bt_list);
-  bt_filling = FALSE;
+}
+
+static GtkWidget *
+bt_find_row (QuickSettings *qs,
+             const gchar   *mac)
+{
+  GList *rows = gtk_container_get_children (GTK_CONTAINER (qs->bt_list));
+  GList *l;
+  GtkWidget *found = NULL;
+
+  for (l = rows; l != NULL; l = l->next)
+    {
+      const gchar *m;
+
+      if (!GTK_IS_LIST_BOX_ROW (l->data))
+        continue;
+      m = g_object_get_data (G_OBJECT (l->data), "qs-mac");
+      if (g_strcmp0 (m, mac) == 0)
+        {
+          found = GTK_WIDGET (l->data);
+          break;
+        }
+    }
+  g_list_free (rows);
+  return found;
 }
 
 static gboolean
@@ -287,84 +361,70 @@ bt_update_row (QuickSettings *qs,
                gboolean       connected,
                gboolean       paired)
 {
-  GList *rows = gtk_container_get_children (GTK_CONTAINER (qs->bt_list));
-  GList *l;
-  gboolean found = FALSE;
+  GtkWidget *row = bt_find_row (qs, mac);
+  GtkWidget *hbox;
+  GList     *kids;
+  GList     *k;
+  GtkWidget *icon = NULL;
+  GtkWidget *state = NULL;
+  gint       labels_seen = 0;
 
-  for (l = rows; l != NULL; l = l->next)
+  if (row == NULL)
+    return FALSE;
+  hbox = gtk_bin_get_child (GTK_BIN (row));
+  if (hbox == NULL || !GTK_IS_BOX (hbox))
+    return FALSE;
+  kids = gtk_container_get_children (GTK_CONTAINER (hbox));
+  for (k = kids; k != NULL; k = k->next)
     {
-      const gchar *m;
-      GtkWidget   *hbox;
-      GList       *kids;
-      GList       *k;
-      GtkWidget   *icon = NULL;
-      GtkWidget   *state = NULL;
-      gint         labels_seen = 0;
-
-      if (!GTK_IS_LIST_BOX_ROW (l->data))
-        continue;
-      m = g_object_get_data (G_OBJECT (l->data), "qs-mac");
-      if (g_strcmp0 (m, mac) != 0)
-        continue;
-      hbox = gtk_bin_get_child (GTK_BIN (l->data));
-      if (hbox == NULL || !GTK_IS_BOX (hbox))
-        break;
-      kids = gtk_container_get_children (GTK_CONTAINER (hbox));
-      for (k = kids; k != NULL; k = k->next)
+      if (GTK_IS_IMAGE (k->data) && icon == NULL)
+        icon = GTK_WIDGET (k->data);
+      else if (GTK_IS_LABEL (k->data))
         {
-          if (GTK_IS_IMAGE (k->data) && icon == NULL)
-            icon = GTK_WIDGET (k->data);
-          else if (GTK_IS_LABEL (k->data))
-            {
-              /* hbox packs icon, name, state: second label is the state. */
-              labels_seen++;
-              if (labels_seen == 2)
-                state = GTK_WIDGET (k->data);
-            }
+          labels_seen++;
+          if (labels_seen == 2)
+            state = GTK_WIDGET (k->data);
         }
-      if (state != NULL)
-        gtk_label_set_text (GTK_LABEL (state),
-                            connected ? "Connected"
-                            : paired ? "Paired" : "");
-      if (icon != NULL)
-        gtk_image_set_from_icon_name (GTK_IMAGE (icon),
-                                      connected
-                                      ? "bluetooth-active-symbolic"
-                                      : "bluetooth-symbolic",
-                                      GTK_ICON_SIZE_LARGE_TOOLBAR);
-      g_list_free (kids);
-      g_object_set_data (G_OBJECT (l->data), "qs-connected",
-                         GINT_TO_POINTER (connected));
-      g_object_set_data (G_OBJECT (l->data), "qs-paired",
-                         GINT_TO_POINTER (paired));
-      if (connected)
-        {
-          const gchar *nm = g_object_get_data (G_OBJECT (l->data), "qs-name");
-
-          if (nm != NULL)
-            {
-              gtk_label_set_text (GTK_LABEL (qs->bt_sub), nm);
-              g_free (qs->bt_connected_name);
-              qs->bt_connected_name = g_strdup (nm);
-            }
-        }
-      else
-        {
-          const gchar *nm = g_object_get_data (G_OBJECT (l->data), "qs-name");
-          const gchar *sub = gtk_label_get_text (GTK_LABEL (qs->bt_sub));
-
-          if (nm != NULL && sub != NULL && g_strcmp0 (nm, sub) == 0)
-            {
-              gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
-              g_free (qs->bt_connected_name);
-              qs->bt_connected_name = NULL;
-            }
-        }
-      found = TRUE;
-      break;
     }
-  g_list_free (rows);
-  return found;
+  if (state != NULL)
+    gtk_label_set_text (GTK_LABEL (state),
+                        connected ? "Connected"
+                        : paired ? "Paired" : "");
+  if (icon != NULL)
+    gtk_image_set_from_icon_name (GTK_IMAGE (icon),
+                                  connected
+                                  ? "bluetooth-active-symbolic"
+                                  : "bluetooth-symbolic",
+                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
+  g_list_free (kids);
+  g_object_set_data (G_OBJECT (row), "qs-connected",
+                     GINT_TO_POINTER (connected));
+  g_object_set_data (G_OBJECT (row), "qs-paired",
+                     GINT_TO_POINTER (paired));
+  if (connected)
+    {
+      const gchar *nm = g_object_get_data (G_OBJECT (row), "qs-name");
+
+      if (nm != NULL)
+        {
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub), nm);
+          g_free (qs->bt_connected_name);
+          qs->bt_connected_name = g_strdup (nm);
+        }
+    }
+  else
+    {
+      const gchar *nm = g_object_get_data (G_OBJECT (row), "qs-name");
+      const gchar *sub = gtk_label_get_text (GTK_LABEL (qs->bt_sub));
+
+      if (nm != NULL && sub != NULL && g_strcmp0 (nm, sub) == 0)
+        {
+          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "On");
+          g_free (qs->bt_connected_name);
+          qs->bt_connected_name = NULL;
+        }
+    }
+  return TRUE;
 }
 
 typedef struct
@@ -415,34 +475,8 @@ bt_load_idle (gpointer data)
   qs->bt_controller = r->controller;
   r->controller = NULL;
   qs->bt_on = (qs->bt_controller != NULL && r->powered);
-  qs->updating = TRUE;
-  gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), qs->bt_on);
-  qs->updating = FALSE;
-  set_tile_active (qs->bt_tile, qs->bt_on);
-
-  if (qs->bt_controller == NULL)
-    {
-      gtk_label_set_text (GTK_LABEL (qs->bt_status),
-                          command_exists ("bluetoothctl")
-                          ? "No Bluetooth adapter found."
-                          : "Install bluez-utils.");
-      gtk_widget_set_sensitive (qs->bt_switch, FALSE);
-      gtk_label_set_text (GTK_LABEL (qs->bt_sub), "No adapter");
-      bt_fill_list (qs, NULL, "No adapter.");
-    }
-  else if (!r->powered)
-    {
-      gtk_label_set_text (GTK_LABEL (qs->bt_status), "Bluetooth is off.");
-      gtk_widget_set_sensitive (qs->bt_switch, TRUE);
-      gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Off");
-      bt_fill_list (qs, NULL, "Turn Bluetooth on to see devices.");
-    }
-  else
-    {
-      gtk_label_set_text (GTK_LABEL (qs->bt_status), "");
-      gtk_widget_set_sensitive (qs->bt_switch, TRUE);
-      bt_fill_list (qs, r->devs, "No devices found.");
-    }
+  bt_sync_switch_tile (qs);
+  bt_paint_state (qs, r->powered, r->devs);
 
   bt_cache_store (qs->bt_controller, r->powered, r->devs);
   qs->scanning_bt = FALSE;
@@ -456,6 +490,19 @@ bt_load_idle (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+static gboolean
+bt_spawn_named (const gchar *name,
+                GThreadFunc  func,
+                gpointer     data)
+{
+  GThread *t = g_thread_try_new (name, func, data, NULL);
+
+  if (t == NULL)
+    return FALSE;
+  g_thread_unref (t);
+  return TRUE;
+}
+
 static void
 bt_start_load_thread (QuickSettings *qs)
 {
@@ -463,17 +510,11 @@ bt_start_load_thread (QuickSettings *qs)
 
   r->qs = qs;
   qs_ref (qs);
-  {
-    GThread *t = g_thread_try_new ("qs-bt", bt_load_thread, r, NULL);
-
-    if (t == NULL)
-      {
-        qs_unref (qs);
-        g_free (r);
-      }
-    else
-      g_thread_unref (t);
-  }
+  if (!bt_spawn_named ("qs-bt", bt_load_thread, r))
+    {
+      qs_unref (qs);
+      g_free (r);
+    }
 }
 
 static void
@@ -576,7 +617,6 @@ typedef struct
   gchar         *fail_detail; /* error detail of the failed verb (owned) */
 } BtLink;
 
-/* Live chains, for bt_cancel_all() on destroy. Main loop only. */
 static GList *bt_active_links = NULL;
 
 static void
@@ -591,32 +631,11 @@ bt_link_untrack (BtLink *l)
   bt_active_links = g_list_remove (bt_active_links, l);
 }
 
-/* Verify stage: `disconnect`/`connect` return before BlueZ flips the
- * Connected flag, so a single `info` read right after the verb often
- * still shows the old state. The `info` read is re-tried on the main
- * loop with a short delay (250 ms: feels instant, still far above the
- * ~10 ms cost of one `info` poll, so no busy-loop); the try count keeps
- * the same total coverage as before (about 5.7 s on success, 2.5 s
- * after a failed verb). Without this retry, the row keeps the stale
- * "Connected" label until the next manual Scan. */
 #define BT_VERIFY_MAX_TRIES 24
 #define BT_VERIFY_DELAY_MS 250
-
-/* Same idea, but after a verb that FAILED (or was cut short by our own
- * watchdog): BlueZ may still be working in the background, so the real
- * state is checked a few times before declaring failure. This is what
- * turns "the command was cut short but the device did connect" from a
- * false error into the proper success message. */
 #define BT_VERIFY_AFTER_FAIL_TRIES 11
 #define BT_VERIFY_AFTER_FAIL_DELAY_MS 250
 
-/* `bluetoothctl connect` blocks for the whole BlueZ page timeout (10 s
- * and counting) — a device that is slow to wake up is still connecting
- * when the generic 5 s watchdog fires, so the UI used to report
- * "Failed to connect" while the device was actually connecting. The
- * verbs therefore get their own timeout, always larger than the
- * bluetoothctl --timeout used below, plus an env hook so the test
- * suite can exercise the cut-short path in milliseconds. */
 #define BT_LINK_CTL_TIMEOUT_SECS 15
 #define BT_LINK_CMD_TIMEOUT_SECS 20
 
@@ -672,9 +691,7 @@ bt_link_finish (BtLink *l)
   bt_link_free (l);
 }
 
-/* Cancels pending verify timeouts and flags chains so their next
- * callback frees without touching widgets. Call from plugin free-data
- * (net_cleanup). Main loop only. */
+/* Cancels pending verifies; next callbacks free without touching widgets. */
 void
 bt_cancel_all (void)
 {
@@ -745,9 +762,7 @@ static void bt_link_verify_done (const gchar *output,
                                  gboolean     ok,
                                  gpointer     user_data);
 
-/* Starts the verify stage: re-reads `info` up to `tries` times (every
- * `delay_ms`) to confirm the real device state before showing success
- * or failure. Main loop only. */
+/* Starts the verify stage: re-read `info` until the real state shows. */
 static void
 bt_link_start_verify (BtLink *l,
                       gint    tries,
@@ -766,9 +781,7 @@ bt_link_start_verify (BtLink *l,
   g_free (cmd);
 }
 
-/* Re-reads `info` after a short delay while the verify stage is still
- * inconclusive. Main loop; the BtLink (qs ref + per-MAC busy) stays alive
- * until the final verdict. Checks dead/cancelled first. */
+/* Re-reads `info` while the verify stage is still inconclusive. */
 static gboolean
 bt_verify_timeout (gpointer data)
 {
@@ -792,6 +805,52 @@ bt_verify_timeout (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+static gchar *
+bt_steal_fail_detail (BtLink *l)
+{
+  gchar *detail = l->fail_detail;
+
+  l->fail_detail = NULL;
+  return detail;
+}
+
+static void
+bt_verify_success (BtLink  *l,
+                   gboolean paired,
+                   gboolean trusted,
+                   gboolean connected)
+{
+  gchar *msg = g_strdup_printf (connected ? "Connected to %s."
+                                          : "Disconnected from %s.",
+                                l->name);
+
+  gtk_label_set_text (GTK_LABEL (l->qs->bt_status), msg);
+  g_free (msg);
+  bt_cache_update (l->mac, paired, trusted, connected, TRUE);
+  if (!bt_update_row (l->qs, l->mac, connected, paired))
+    bt_fill_list (l->qs, bt_cache_devs, "No devices found.");
+  bt_link_finish (l);
+}
+
+static void
+bt_verify_retry (BtLink *l)
+{
+  l->verify_tries--;
+  gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
+  l->verify_src = g_timeout_add (l->verify_delay_ms,
+                                 bt_verify_timeout, l);
+}
+
+static void
+bt_verify_give_up (BtLink      *l,
+                   gchar       *detail,
+                   const gchar *verb)
+{
+  bt_start_load_thread (l->qs);
+  bt_link_fail (l, verb, detail);
+  g_free (detail);
+}
+
 static void
 bt_link_verify_done (const gchar *output,
                      const gchar *errout,
@@ -802,7 +861,6 @@ bt_link_verify_done (const gchar *output,
   gboolean paired = FALSE;
   gboolean trusted = FALSE;
   gboolean connected = FALSE;
-  gchar   *msg;
 
   (void) errout;
   (void) ok;
@@ -812,79 +870,31 @@ bt_link_verify_done (const gchar *output,
       return;
     }
   bt_info_text_flags (output, &paired, &trusted, &connected);
-  if (l->disconnecting)
+  if ((connected && !l->disconnecting) || (!connected && l->disconnecting))
     {
-      if (!connected)
-        {
-          msg = g_strdup_printf ("Disconnected from %s.", l->name);
-          gtk_label_set_text (GTK_LABEL (l->qs->bt_status), msg);
-          g_free (msg);
-          /* Cache first so the fallback refill shows the new state;
-           * bt_update_row patches the row in place on the main thread
-           * (this callback already runs via g_idle_add) and releases
-           * the per-MAC busy through bt_link_finish below. */
-          bt_cache_update (l->mac, paired, trusted, FALSE, TRUE);
-          if (!bt_update_row (l->qs, l->mac, FALSE, paired))
-            bt_fill_list (l->qs, bt_cache_devs, "No devices found.");
-          bt_link_finish (l);
-        }
-      else if (l->verify_tries > 1)
-        {
-          l->verify_tries--;
-          gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-          l->verify_src = g_timeout_add (l->verify_delay_ms,
-                                         bt_verify_timeout, l);
-        }
-      else
-        {
-          gchar *detail = NULL;
-
-          if (l->verifying_after_fail)
-            {
-              /* Keep the original error detail (the BlueZ error). */
-              detail = l->fail_detail;
-              l->fail_detail = NULL;
-            }
-          bt_start_load_thread (l->qs);
-          bt_link_fail (l, "disconnect", detail);
-          g_free (detail);
-        }
+      bt_verify_success (l, paired, trusted, connected);
       return;
     }
-  if (connected)
+  if (l->verify_tries > 1)
     {
-      msg = g_strdup_printf ("Connected to %s.", l->name);
-      gtk_label_set_text (GTK_LABEL (l->qs->bt_status), msg);
-      g_free (msg);
-      bt_cache_update (l->mac, paired, trusted, TRUE, TRUE);
-      if (!bt_update_row (l->qs, l->mac, TRUE, paired))
-        bt_fill_list (l->qs, bt_cache_devs, "No devices found.");
-      bt_link_finish (l);
+      bt_verify_retry (l);
+      return;
     }
-  else if (l->verify_tries > 1)
-    {
-      l->verify_tries--;
-      gtk_label_set_text (GTK_LABEL (l->qs->bt_status), "Verifying…");
-      l->verify_src = g_timeout_add (l->verify_delay_ms,
-                                     bt_verify_timeout, l);
-    }
-  else
+  if (l->disconnecting)
     {
       gchar *detail = NULL;
 
       if (l->verifying_after_fail)
-        {
-          /* Keep the original error detail (the BlueZ error). */
-          detail = l->fail_detail;
-          l->fail_detail = NULL;
-        }
-      else
-        {
-          detail = bt_first_detail (output, errout);
-        }
-      bt_start_load_thread (l->qs);
-      bt_link_fail (l, "connect", detail);
-      g_free (detail);
+        detail = bt_steal_fail_detail (l);
+      bt_verify_give_up (l, detail, "disconnect");
+    }
+  else
+    {
+      gchar *detail = bt_steal_fail_detail (l);
+
+      if (!l->verifying_after_fail)
+        detail = bt_first_detail (output, errout);
+      bt_verify_give_up (l, detail, "connect");
     }
 }
 
@@ -960,9 +970,7 @@ bt_link_run_next (BtLink *l)
   g_free (cmd);
 }
 
-/* Decides connect vs disconnect from a fresh `info` snapshot. Connected
- * devices disconnect; others connect, skipping pair/trust when `info`
- * already reports Paired/Trusted yes. */
+/* Connected devices disconnect; others connect (skipping pair/trust when done). */
 static void
 bt_toggle_info_done (const gchar *output,
                      const gchar *errout,
@@ -1090,33 +1098,8 @@ bt_show_page (QuickSettings *qs)
       g_free (qs->bt_controller);
       qs->bt_controller = g_strdup (bt_cache_controller);
       qs->bt_on = (qs->bt_controller != NULL && bt_cache_powered);
-      qs->updating = TRUE;
-      gtk_switch_set_active (GTK_SWITCH (qs->bt_switch), qs->bt_on);
-      qs->updating = FALSE;
-      set_tile_active (qs->bt_tile, qs->bt_on);
-      if (qs->bt_controller == NULL)
-        {
-          gtk_label_set_text (GTK_LABEL (qs->bt_status),
-                              command_exists ("bluetoothctl")
-                              ? "No Bluetooth adapter found."
-                              : "Install bluez-utils.");
-          gtk_widget_set_sensitive (qs->bt_switch, FALSE);
-          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "No adapter");
-          bt_fill_list (qs, NULL, "No adapter.");
-        }
-      else if (!bt_cache_powered)
-        {
-          gtk_label_set_text (GTK_LABEL (qs->bt_status), "Bluetooth is off.");
-          gtk_widget_set_sensitive (qs->bt_switch, TRUE);
-          gtk_label_set_text (GTK_LABEL (qs->bt_sub), "Off");
-          bt_fill_list (qs, NULL, "Turn Bluetooth on to see devices.");
-        }
-      else
-        {
-          gtk_label_set_text (GTK_LABEL (qs->bt_status), "");
-          gtk_widget_set_sensitive (qs->bt_switch, TRUE);
-          bt_fill_list (qs, bt_cache_devs, "No devices found.");
-        }
+      bt_sync_switch_tile (qs);
+      bt_paint_state (qs, bt_cache_powered, bt_cache_devs);
       gtk_widget_set_sensitive (qs->bt_scan, TRUE);
       gtk_button_set_label (GTK_BUTTON (qs->bt_scan), "Scan for devices");
       return;
@@ -1245,21 +1228,14 @@ bt_refresh_tile_async (QuickSettings *qs)
   p = g_new0 (BtTileProbe, 1);
   p->qs = qs;
   qs_ref (qs);
-  {
-    GThread *t = g_thread_try_new ("qs-bt-tile", bt_tile_probe_thread, p, NULL);
-
-    if (t == NULL)
-      {
-        qs->bt_tile_probe = FALSE;
-        qs_unref (qs);
-        g_free (p);
-      }
-    else
-      g_thread_unref (t);
-  }
+  if (!bt_spawn_named ("qs-bt-tile", bt_tile_probe_thread, p))
+    {
+      qs->bt_tile_probe = FALSE;
+      qs_unref (qs);
+      g_free (p);
+    }
 }
 
-/* Builds the Bluetooth sub-page; back_out is left unwired for the facade. */
 void
 bt_build_page (GtkWidget     *stack,
                QuickSettings *qs,

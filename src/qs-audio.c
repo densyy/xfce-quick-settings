@@ -11,6 +11,74 @@ typedef struct
   gboolean       is_source;
 } AudioVolReq;
 
+void audio_refresh_input_volume (QuickSettings *qs);
+
+static gint
+audio_parse_volume (AudioVolReq *req,
+                    const gchar *output)
+{
+  if (req->backend == AUDIO_PACTL)
+    return parse_first_percent (output);
+  if (req->backend == AUDIO_WPCTL)
+    {
+      const gchar *p = strstr (output, "Volume:");
+
+      if (p == NULL)
+        return -1;
+      return (gint) (g_ascii_strtod (p + 7, NULL) * 100.0 + 0.5);
+    }
+  if (req->use_amixer)
+    return parse_first_percent (output);
+  return -1;
+}
+
+static const gchar *
+audio_volume_tip (gint value)
+{
+  return value > 100 ? "Volume (boosted above 100%)" : "Volume";
+}
+
+static void
+audio_paint_scale (GtkWidget *scale,
+                   GtkWidget *icon,
+                   gint       value)
+{
+  gtk_range_set_value (GTK_RANGE (scale), value);
+  if (icon != NULL)
+    gtk_image_set_from_icon_name (GTK_IMAGE (icon),
+                                  volume_icon_for_level (value),
+                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
+  gtk_widget_set_sensitive (scale, TRUE);
+  gtk_widget_set_tooltip_text (scale, audio_volume_tip (value));
+}
+
+static void
+audio_apply_volume (QuickSettings *qs,
+                    AudioVolReq   *req,
+                    gint           value)
+{
+  GtkWidget *scale = req->is_source ? qs->audio_in_vol_scale : qs->audio_out_vol_scale;
+  GtkWidget *icon = req->is_source ? qs->audio_in_vol_icon : qs->audio_out_vol_icon;
+
+  if (scale == NULL)
+    scale = qs->vol_scale;
+  if (icon == NULL)
+    icon = qs->vol_icon;
+  qs->updating = TRUE;
+  value = MIN (value, 150);
+  if (value < 0)
+    {
+      gtk_widget_set_sensitive (scale, FALSE);
+      gtk_widget_set_tooltip_text (scale, "Volume unavailable");
+      qs->updating = FALSE;
+      return;
+    }
+  audio_paint_scale (scale, icon, value);
+  if (!req->is_source && qs->vol_scale != NULL && qs->vol_scale != scale)
+    audio_paint_scale (qs->vol_scale, qs->vol_icon, value);
+  qs->updating = FALSE;
+}
+
 static void
 audio_volume_done (const gchar *output,
                    const gchar *errout,
@@ -20,89 +88,96 @@ audio_volume_done (const gchar *output,
   AudioVolReq   *req = user_data;
   QuickSettings *qs = req->qs;
   gint           value = -1;
-  const gchar   *p;
 
   (void) errout;
   if (!g_atomic_int_get (&qs->dead) && ok && output != NULL)
-    {
-      if (req->backend == AUDIO_PACTL)
-        value = parse_first_percent (output);
-      else if (req->backend == AUDIO_WPCTL)
-        {
-          p = strstr (output, "Volume:");
-          if (p != NULL)
-            value = (gint) (g_ascii_strtod (p + 7, NULL) * 100.0 + 0.5);
-        }
-      else if (req->use_amixer)
-        value = parse_first_percent (output);
-    }
+    value = audio_parse_volume (req, output);
   if (!g_atomic_int_get (&qs->dead))
-    {
-      GtkWidget *target_scale = req->is_source ? qs->audio_in_vol_scale : qs->audio_out_vol_scale;
-       GtkWidget *target_icon = req->is_source ? qs->audio_in_vol_icon : qs->audio_out_vol_icon;
-
-       if (target_scale == NULL)
-        target_scale = qs->vol_scale;
-       if (target_icon == NULL)
-        target_icon = qs->vol_icon;
-
-       qs->updating = TRUE;
-       value = (value > 150) ? 150 : value;
-       if (value >= 0)
-        {
-          gtk_range_set_value (GTK_RANGE (target_scale), value);
-           if (target_icon != NULL)
-            gtk_image_set_from_icon_name (GTK_IMAGE (target_icon),
-                                          volume_icon_for_level (value),
-                                          GTK_ICON_SIZE_LARGE_TOOLBAR);
-           gtk_widget_set_sensitive (target_scale, TRUE);
-           gtk_widget_set_tooltip_text (target_scale,
-                                       value > 100
-                                       ? "Volume (boosted above 100%)"
-                                       : "Volume");
-           if (!req->is_source && qs->vol_scale != NULL && qs->vol_scale != target_scale)
-            {
-              gtk_range_set_value (GTK_RANGE (qs->vol_scale), value);
-               if (qs->vol_icon != NULL)
-                gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
-                                              volume_icon_for_level (value),
-                                              GTK_ICON_SIZE_LARGE_TOOLBAR);
-            }
-        }
-      else
-        {
-          gtk_widget_set_sensitive (target_scale, FALSE);
-           gtk_widget_set_tooltip_text (target_scale, "Volume unavailable");
-        }
-      qs->updating = FALSE;
-     }
+    audio_apply_volume (qs, req, value);
   qs_unref (qs);
   g_free (req);
 }
 
-/* Parses one "Sinks:" or "Sources:" section of "wpctl status".
- * Entry lines look like: " │  *  56. Description [vol: 1.00]" ("*" = default). */
+static const gchar *
+wpctl_skip_prefix (const gchar *line,
+                   gboolean     *is_default)
+{
+  const gchar *p = line;
+
+  while (*p != '\0' && *p != '*' && (*p < '0' || *p > '9'))
+    p++;
+  if (*p == '*')
+    {
+      *is_default = TRUE;
+      p++;
+      while (*p == ' ')
+        p++;
+    }
+  return p;
+}
+
+static AudioDev *
+parse_wpctl_row (const gchar *line)
+{
+  const gchar *p;
+  gboolean is_default = FALSE;
+  gchar *end = NULL;
+  glong id;
+  const gchar *bracket;
+  gchar *desc;
+  gchar *id_str;
+  AudioDev *dev;
+
+  p = wpctl_skip_prefix (line, &is_default);
+  if (*p < '0' || *p > '9')
+    return NULL;
+  id = strtol (p, &end, 10);
+  if (end == p || end == NULL || *end != '.')
+    return NULL;
+  p = end + 1;
+  while (*p == ' ')
+    p++;
+  bracket = strstr (p, " [vol:");
+  if (bracket != NULL && bracket > p)
+    desc = g_strndup (p, (gsize) (bracket - p));
+  else
+    desc = g_strdup (p);
+  g_strstrip (desc);
+  id_str = g_strdup_printf ("%ld", id);
+  if (*desc == '\0')
+    {
+      g_free (desc);
+      desc = g_strdup (id_str);
+    }
+  dev = audio_dev_new (id_str, desc, is_default);
+  g_free (id_str);
+  g_free (desc);
+  return dev;
+}
+
+static gboolean
+wpctl_section_end (const gchar *line)
+{
+  return *line == '\0'
+    || strstr (line, "├─") != NULL
+    || strstr (line, "└─") != NULL;
+}
+
 static GList *
 parse_wpctl_section (const gchar *status_output,
                      const gchar *section)
 {
-  GList  *devs = NULL;
+  GList *devs = NULL;
   gchar **lines;
   gboolean in_section = FALSE;
-  gint     i;
+  gint i;
 
   if (status_output == NULL)
     return NULL;
   lines = g_strsplit (status_output, "\n", -1);
   for (i = 0; lines[i] != NULL; i++)
     {
-      const gchar *p;
-      gboolean     is_default = FALSE;
-      gchar       *end = NULL;
-      glong        id;
-      const gchar *bracket;
-      gchar       *desc;
-      gchar       *id_str;
+      AudioDev *dev;
 
       if (!in_section)
         {
@@ -110,94 +185,68 @@ parse_wpctl_section (const gchar *status_output,
             in_section = TRUE;
           continue;
         }
-      if (*lines[i] == '\0'
-          || strstr (lines[i], "├─") != NULL
-          || strstr (lines[i], "└─") != NULL)
+      if (wpctl_section_end (lines[i]))
         break;
-      p = lines[i];
-      while (*p != '\0' && *p != '*' && (*p < '0' || *p > '9'))
-        p++;
-      if (*p == '*')
-        {
-          is_default = TRUE;
-          p++;
-          while (*p == ' ')
-            p++;
-        }
-      if (*p < '0' || *p > '9')
-        continue;
-      id = strtol (p, &end, 10);
-      if (end == p || end == NULL || *end != '.')
-        continue;
-      p = end + 1;
-      while (*p == ' ')
-        p++;
-      bracket = strstr (p, " [vol:");
-      desc = (bracket != NULL && bracket > p)
-             ? g_strndup (p, (gsize) (bracket - p)) : g_strdup (p);
-      g_strstrip (desc);
-      id_str = g_strdup_printf ("%ld", id);
-      if (*desc == '\0')
-        {
-          g_free (desc);
-          desc = g_strdup (id_str);
-        }
-      devs = g_list_append (devs, audio_dev_new (id_str, desc, is_default));
-      g_free (id_str);
-      g_free (desc);
+      dev = parse_wpctl_row (lines[i]);
+      if (dev != NULL)
+        devs = g_list_append (devs, dev);
     }
   g_strfreev (lines);
   return devs;
 }
 
 static void
+set_default_pactl (const gchar *set_cmd,
+                   const gchar *list_cmd,
+                   const gchar *move_cmd,
+                   const gchar *id)
+{
+  gchar *quoted = g_shell_quote (id);
+  gchar *cmd = g_strdup_printf ("%s %s", set_cmd, quoted);
+
+  spawn_command (cmd);
+  g_free (cmd);
+  pactl_move_streams (list_cmd, move_cmd, id);
+  g_free (quoted);
+}
+
+static void
+set_default_wpctl (const gchar *id)
+{
+  gchar *cmd = g_strdup_printf ("wpctl set-default %s", id);
+
+  spawn_command (cmd);
+  g_free (cmd);
+}
+
+static void
 set_default_sink (QuickSettings *qs,
                   const gchar   *id)
 {
-  gchar *cmd;
-
   if (qs->audio_backend == AUDIO_PACTL)
     {
-      gchar *quoted = g_shell_quote (id);
-
-      cmd = g_strdup_printf ("pactl set-default-sink %s", quoted);
-      spawn_command (cmd);
-      g_free (cmd);
-      pactl_move_streams ("pactl list short sink-inputs",
-                          "pactl move-sink-input", id);
-      g_free (quoted);
+      set_default_pactl ("pactl set-default-sink",
+                         "pactl list short sink-inputs",
+                         "pactl move-sink-input", id);
+      return;
     }
-  else if (qs->audio_backend == AUDIO_WPCTL)
-    {
-      cmd = g_strdup_printf ("wpctl set-default %s", id);
-      spawn_command (cmd);
-      g_free (cmd);
-    }
+  if (qs->audio_backend == AUDIO_WPCTL)
+    set_default_wpctl (id);
 }
 
 static void
 set_default_source (QuickSettings *qs,
                     const gchar   *id)
 {
-  gchar *cmd;
-
   if (qs->audio_backend == AUDIO_PACTL)
     {
-      gchar *quoted = g_shell_quote (id);
-
-      cmd = g_strdup_printf ("pactl set-default-source %s", quoted);
-      spawn_command (cmd);
-      g_free (cmd);
-      pactl_move_streams ("pactl list short source-outputs",
-                          "pactl move-source-output", id);
-      g_free (quoted);
+      set_default_pactl ("pactl set-default-source",
+                         "pactl list short source-outputs",
+                         "pactl move-source-output", id);
+      return;
     }
-  else if (qs->audio_backend == AUDIO_WPCTL)
-    {
-      cmd = g_strdup_printf ("wpctl set-default %s", id);
-      spawn_command (cmd);
-      g_free (cmd);
-    }
+  if (qs->audio_backend == AUDIO_WPCTL)
+    set_default_wpctl (id);
 }
 static GtkWidget *
 make_device_row (GtkWidget   *grid,
@@ -252,9 +301,6 @@ fill_device_combo (GtkWidget   *combo,
     }
 }
 
-/* Reload output/input device lists and select the current defaults.
- * Async: pactl/wpctl leitura roda em worker (sem spawn sync na UI);
- * fill dos combos no idle (main loop) com qs_ref/dead. */
 #define AUDIO_DATA_LOADING "qs-audio-loading"
 
 typedef struct
@@ -382,10 +428,7 @@ on_volume_changed (GtkRange *range,
   gtk_image_set_from_icon_name (GTK_IMAGE (qs->vol_icon),
                                 volume_icon_for_level (value),
                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
-  gtk_widget_set_tooltip_text (qs->vol_scale,
-                               value > 100
-                               ? "Volume (boosted above 100%)"
-                               : "Volume");
+  gtk_widget_set_tooltip_text (qs->vol_scale, audio_volume_tip (value));
 }
 static void
 on_sink_changed (GtkComboBox *combo,
@@ -415,30 +458,26 @@ on_source_changed (GtkComboBox *combo,
   if (id == NULL || *id == '\0' || g_strcmp0 (id, "none") == 0)
     return;
   set_default_source (qs, id);
-void audio_refresh_input_volume (QuickSettings *qs);
 }
 
-void audio_refresh_input_volume (QuickSettings *qs);
 static void
 on_sink_volume_changed (GtkRange *range,
                        gpointer  user_data)
 {
   QuickSettings *qs = user_data;
+  gint           value;
+
   if (qs->updating)
     return;
-  {
-    gint value = (gint) (gtk_range_get_value (range) + 0.5);
-    set_volume_percent (value);
-    if (qs->audio_out_vol_icon != NULL)
-      gtk_image_set_from_icon_name (GTK_IMAGE (qs->audio_out_vol_icon),
-                                    volume_icon_for_level (value),
-                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
-    if (qs->audio_out_vol_scale != NULL)
-      gtk_widget_set_tooltip_text (qs->audio_out_vol_scale,
-                                   value > 100
-                                   ? "Volume (boosted above 100%)"
-                                   : "Volume");
-  }
+  value = (gint) (gtk_range_get_value (range) + 0.5);
+  set_volume_percent (value);
+  if (qs->audio_out_vol_icon != NULL)
+    gtk_image_set_from_icon_name (GTK_IMAGE (qs->audio_out_vol_icon),
+                                  volume_icon_for_level (value),
+                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
+  if (qs->audio_out_vol_scale != NULL)
+    gtk_widget_set_tooltip_text (qs->audio_out_vol_scale,
+                                 audio_volume_tip (value));
 }
 
 static void
@@ -446,18 +485,18 @@ on_source_volume_changed (GtkRange *range,
                           gpointer  user_data)
 {
   QuickSettings *qs = user_data;
+  gint           value;
+
   if (qs->updating)
     return;
-  {
-    gint value = (gint) (gtk_range_get_value (range) + 0.5);
-    set_source_volume_percent (value);
-    if (qs->audio_in_vol_icon != NULL)
-      gtk_image_set_from_icon_name (GTK_IMAGE (qs->audio_in_vol_icon),
-                                    volume_icon_for_level (value),
-                                    GTK_ICON_SIZE_LARGE_TOOLBAR);
-    if (qs->audio_in_vol_scale != NULL)
-      gtk_widget_set_tooltip_text (qs->audio_in_vol_scale, "Input volume");
-  }
+  value = (gint) (gtk_range_get_value (range) + 0.5);
+  set_source_volume_percent (value);
+  if (qs->audio_in_vol_icon != NULL)
+    gtk_image_set_from_icon_name (GTK_IMAGE (qs->audio_in_vol_icon),
+                                  volume_icon_for_level (value),
+                                  GTK_ICON_SIZE_LARGE_TOOLBAR);
+  if (qs->audio_in_vol_scale != NULL)
+    gtk_widget_set_tooltip_text (qs->audio_in_vol_scale, "Input volume");
 }
 
 static void
@@ -496,13 +535,8 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
   make_slider_row (sound_grid, 0, 150, "audio-volume-high-symbolic", "Volume",
                    &qs->vol_icon, &qs->vol_scale);
   gtk_scale_add_mark (GTK_SCALE (qs->vol_scale), 100.0, GTK_POS_BOTTOM, "100%");
-  /* The bottom mark makes this row taller below the trough; keep the
-   * icon (and scale) vertically centered so the icon stays with the bar. */
   gtk_widget_set_valign (qs->vol_icon, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (qs->vol_scale, GTK_ALIGN_CENTER);
-  /* Tile in a homogeneous grid row like Wi-Fi + Bluetooth (qs-net.c):
-   * packed in the main box it would expand vertically with the popup,
-   * dwarfing the other tiles; nested here it keeps its natural height. */
   tile_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, QS_INNER_GAP);
   gtk_box_set_homogeneous (GTK_BOX (tile_box), TRUE);
   gtk_grid_attach (GTK_GRID (sound_grid), tile_box, 0, 1, 2, 1);
@@ -543,8 +577,6 @@ audio_build_section (GtkWidget *box, GtkWidget *stack, QuickSettings *qs)
                     G_CALLBACK (on_source_volume_changed), qs);
 }
 
-/* Refresh slider position/icon. Async de 1 comando do backend cacheado;
- * nunca spawna sync na UI. */
 void
 audio_refresh_input_volume (QuickSettings *qs)
 {

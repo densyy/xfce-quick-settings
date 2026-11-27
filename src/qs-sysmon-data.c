@@ -2,15 +2,13 @@
 
 #include <sys/statvfs.h>
 
-/* Pseudo-filesystems never shown as disks. */
 static const gchar *skip_fs[] = {
   "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "securityfs",
   "cgroup", "cgroup2", "pstore", "debugfs", "tracefs", "configfs",
   "fusectl", "mqueue", "hugetlbfs", "nsfs", "overlay", "squashfs", NULL
 };
 
-/* Remote/files de rede: statvfs pode travar na UI (servidor fora).
- * Nunca exibidos; pulados antes de qualquer statvfs. */
+/* Remote filesystems are skipped before any statvfs. */
 static gboolean
 fs_is_network (const gchar *fstype,
                const gchar *device)
@@ -54,8 +52,6 @@ fs_skipped (const gchar *fstype,
   return FALSE;
 }
 
-/* Seam de teste: override de caminho via env, default /proc.
- * QS_SYSMON_MOUNTS e QS_SYSMON_SWAPS permitem fixtures sem root. */
 static const gchar *
 sysmon_mounts_path (void)
 {
@@ -75,9 +71,6 @@ sysmon_swaps_path (void)
     return p;
   return "/proc/swaps";
 }
-
-/* DATA (sem widgets): read_memory/read_cpu/read_disks + helpers puros.
- * Nenhum GTK aqui. */
 
 gboolean
 sysmon_read_memory (guint64 *total_kb,
@@ -206,22 +199,13 @@ unescape_mount (const gchar *s)
 
   while (*p != '\0')
     {
-      if (p[0] == '\\' && p[1] == '1' && p[2] == '3' && p[3] == '4')
-        {
-          g_string_append_c (out, '\\');
-          p += 4;
-        }
-      else if (p[0] == '\\' && p[1] == '0'
+      if (p[0] == '\\' && p[1] >= '0' && p[1] <= '7'
           && p[2] >= '0' && p[2] <= '7' && p[3] >= '0' && p[3] <= '7')
         {
-          if (p[2] == '4' && p[3] == '0')
-            g_string_append_c (out, ' ');
-          else if (p[2] == '1' && p[3] == '1')
-            g_string_append_c (out, '\t');
-          else if (p[2] == '1' && p[3] == '2')
-            g_string_append_c (out, '\n');
-          else if (p[2] == '3' && p[3] == '4')
-            g_string_append_c (out, '\\');
+          gchar c = (gchar) ((p[1] - '0') * 64 + (p[2] - '0') * 8 + (p[3] - '0'));
+
+          if (c == ' ' || c == '\t' || c == '\n' || c == '\\')
+            g_string_append_c (out, c);
           else
             g_string_append_len (out, p, 4);
           p += 4;
@@ -253,6 +237,43 @@ sysmon_free_disks (GPtrArray *disks)
 /* One entry per device: the same partition often appears under several
  * mount points (bind mounts, btrfs subvolumes). Caller frees the list
  * with sysmon_free_disks. Swap agrega /proc/swaps em uma linha "swap". */
+static void
+swaps_fold_line (const gchar *line,
+                 guint64     *total_kb,
+                 guint64     *used_kb)
+{
+  gchar **fields;
+  gchar *tokens[8];
+  gint ntok = 0;
+  gint k;
+  guint64 size_kb;
+  guint64 used;
+
+  if (line[0] == '\0' || g_str_has_prefix (line, "Filename"))
+    return;
+  fields = g_strsplit_set (line, " \t", -1);
+  for (k = 0; fields[k] != NULL && ntok < 8; k++)
+    {
+      if (fields[k][0] == '\0')
+        continue;
+      tokens[ntok++] = fields[k];
+    }
+  if (ntok < 4)
+    {
+      g_strfreev (fields);
+      return;
+    }
+  size_kb = g_ascii_strtoull (tokens[2], NULL, 10);
+  used = g_ascii_strtoull (tokens[3], NULL, 10);
+  g_strfreev (fields);
+  if (size_kb == 0)
+    return;
+  if (used > size_kb)
+    used = size_kb;
+  *total_kb += size_kb;
+  *used_kb += used;
+}
+
 GPtrArray *
 sysmon_read_swaps (void)
 {
@@ -268,40 +289,7 @@ sysmon_read_swaps (void)
   lines = g_strsplit (content, "\n", -1);
   g_free (content);
   for (i = 0; lines[i] != NULL; i++)
-    {
-      gchar **fields;
-      gchar *tokens[8];
-      gint ntok = 0;
-      gint k;
-      guint64 size_kb;
-      guint64 used;
-
-      if (lines[i][0] == '\0')
-        continue;
-      if (g_str_has_prefix (lines[i], "Filename"))
-        continue;
-      fields = g_strsplit_set (lines[i], " \t", -1);
-      for (k = 0; fields[k] != NULL && ntok < 8; k++)
-        {
-          if (fields[k][0] == '\0')
-            continue;
-          tokens[ntok++] = fields[k];
-        }
-      if (ntok < 4)
-        {
-          g_strfreev (fields);
-          continue;
-        }
-      size_kb = g_ascii_strtoull (tokens[2], NULL, 10);
-      used = g_ascii_strtoull (tokens[3], NULL, 10);
-      g_strfreev (fields);
-      if (size_kb == 0)
-        continue;
-      if (used > size_kb)
-        used = size_kb;
-      total_kb += size_kb;
-      used_kb += used;
-    }
+    swaps_fold_line (lines[i], &total_kb, &used_kb);
   g_strfreev (lines);
   if (total_kb > 0)
     {
@@ -320,6 +308,56 @@ sysmon_read_swaps (void)
 /* One entry per device: the same partition often appears under several
  * mount points (bind mounts, btrfs subvolumes). Caller frees the list
  * with sysmon_free_disks. */
+static void
+disks_fold_line (GHashTable *seen,
+                 const gchar *line,
+                 GPtrArray   *disks)
+{
+  gchar **parts = g_strsplit (line, " ", 4);
+  struct statvfs st;
+  guint64 total;
+  guint64 used;
+  gchar *device;
+  gchar *target;
+  const gchar *base;
+  SysmonDisk *disk;
+
+  if (g_strv_length (parts) < 3)
+    {
+      g_strfreev (parts);
+      return;
+    }
+  device = unescape_mount (parts[0]);
+  target = unescape_mount (parts[1]);
+  if (fs_skipped (parts[2], device)
+      || statvfs (target, &st) != 0
+      || st.f_blocks == 0
+      || st.f_frsize == 0
+      || g_hash_table_contains (seen, device))
+    {
+      g_free (device);
+      g_free (target);
+      g_strfreev (parts);
+      return;
+    }
+  g_hash_table_add (seen, g_strdup (device));
+  /* f_bfree, not f_bavail: reserved root blocks would inflate usage. */
+  total = (guint64) st.f_blocks * st.f_frsize;
+  used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
+  base = device;
+  if (g_str_has_prefix (device, "/dev/"))
+    base += strlen ("/dev/");
+  disk = g_new (SysmonDisk, 1);
+  disk->name = g_strdup (base);
+  disk->text = sysmon_bytes_text (used, total);
+  disk->fraction = (total == 0) ? 0.0
+                                : (gdouble) used / (gdouble) total;
+  g_ptr_array_add (disks, disk);
+  g_free (device);
+  g_free (target);
+  g_strfreev (parts);
+}
+
 GPtrArray *
 sysmon_read_disks (void)
 {
@@ -337,52 +375,7 @@ sysmon_read_disks (void)
     lines = g_strsplit (content, "\n", -1);
     g_free (content);
     for (i = 0; lines[i] != NULL; i++)
-      {
-        gchar **parts = g_strsplit (lines[i], " ", 4);
-        struct statvfs st;
-        guint64 total;
-        guint64 used;
-        gchar *device;
-        gchar *target;
-        const gchar *base;
-        SysmonDisk *disk;
-
-        if (g_strv_length (parts) < 3)
-          {
-            g_strfreev (parts);
-            continue;
-          }
-        device = unescape_mount (parts[0]);
-        target = unescape_mount (parts[1]);
-        if (fs_skipped (parts[2], device)
-            || statvfs (target, &st) != 0
-            || st.f_blocks == 0
-            || st.f_frsize == 0
-            || g_hash_table_contains (seen, device))
-          {
-            g_free (device);
-            g_free (target);
-            g_strfreev (parts);
-            continue;
-          }
-        g_hash_table_add (seen, g_strdup (device));
-        /* Usa f_bfree (nao f_bavail): f_bfree mede blocos fisicamente livres;
-         * f_bavail esconde blocos reservados ao root e inflaria o uso visivel. */
-        total = (guint64) st.f_blocks * st.f_frsize;
-        used = (guint64) (st.f_blocks - st.f_bfree) * st.f_frsize;
-        base = device;
-        if (g_str_has_prefix (device, "/dev/"))
-          base += strlen ("/dev/");
-        disk = g_new (SysmonDisk, 1);
-        disk->name = g_strdup (base);
-        disk->text = sysmon_bytes_text (used, total);
-        disk->fraction = (total == 0) ? 0.0
-                                      : (gdouble) used / (gdouble) total;
-        g_ptr_array_add (disks, disk);
-        g_free (device);
-        g_free (target);
-        g_strfreev (parts);
-      }
+      disks_fold_line (seen, lines[i], disks);
     g_strfreev (lines);
     g_hash_table_destroy (seen);
   }
@@ -398,10 +391,65 @@ sysmon_read_disks (void)
   return disks;
 }
 
-/* Chave "nome|" dos devices em /proc/mounts SEM statvfs (só parse,
- * barato e sem travar em FS remoto) mais assinatura de /proc/swaps.
- * Hash de montagens: quando igual ao qs->sysmon_disk_key, pula statvfs
- * por disco na UI. Inclui swaps para a linha swap nao congelar. */
+/* Key of device names in /proc/mounts (parse only, no statvfs) plus swaps. */
+static void
+mounts_key_fold_line (GHashTable *seen,
+                      const gchar *line,
+                      GString     *key)
+{
+  gchar **parts = g_strsplit (line, " ", 4);
+  gchar  *device;
+  const gchar *base;
+
+  if (g_strv_length (parts) < 3)
+    {
+      g_strfreev (parts);
+      return;
+    }
+  device = unescape_mount (parts[0]);
+  if (fs_skipped (parts[2], device)
+      || g_hash_table_contains (seen, device))
+    {
+      g_free (device);
+      g_strfreev (parts);
+      return;
+    }
+  g_hash_table_add (seen, g_strdup (device));
+  base = device;
+  if (g_str_has_prefix (device, "/dev/"))
+    base += strlen ("/dev/");
+  g_string_append (key, base);
+  g_string_append_c (key, '|');
+  g_free (device);
+  g_strfreev (parts);
+}
+
+static void
+mounts_key_fold_swaps (GString *key)
+{
+  gchar *swap_content = NULL;
+  gchar **swap_lines;
+  gint k;
+
+  if (!g_file_get_contents (sysmon_swaps_path (), &swap_content, NULL, NULL))
+    return;
+  swap_lines = g_strsplit (swap_content, "\n", -1);
+  g_free (swap_content);
+  for (k = 0; swap_lines[k] != NULL; k++)
+    {
+      gchar *s = g_strstrip (swap_lines[k]);
+
+      if (s[0] == '\0')
+        continue;
+      if (g_str_has_prefix (s, "Filename"))
+        continue;
+      g_string_append (key, "swap:");
+      g_string_append (key, s);
+      g_string_append_c (key, '|');
+    }
+  g_strfreev (swap_lines);
+}
+
 gchar *
 sysmon_mounts_key (void)
 {
@@ -418,58 +466,9 @@ sysmon_mounts_key (void)
   lines = g_strsplit (content, "\n", -1);
   g_free (content);
   for (i = 0; lines[i] != NULL; i++)
-    {
-      gchar **parts = g_strsplit (lines[i], " ", 4);
-      gchar  *device;
-      const gchar *base;
-
-      if (g_strv_length (parts) < 3)
-        {
-          g_strfreev (parts);
-          continue;
-        }
-      device = unescape_mount (parts[0]);
-      if (fs_skipped (parts[2], device)
-          || g_hash_table_contains (seen, device))
-        {
-          g_free (device);
-          g_strfreev (parts);
-          continue;
-        }
-      g_hash_table_add (seen, g_strdup (device));
-      base = device;
-      if (g_str_has_prefix (device, "/dev/"))
-        base += strlen ("/dev/");
-      g_string_append (key, base);
-      g_string_append_c (key, '|');
-      g_free (device);
-      g_strfreev (parts);
-    }
+    mounts_key_fold_line (seen, lines[i], key);
   g_strfreev (lines);
   g_hash_table_destroy (seen);
-  {
-    gchar *swap_content = NULL;
-    gchar **swap_lines;
-    gint k;
-
-    if (g_file_get_contents (sysmon_swaps_path (), &swap_content, NULL, NULL))
-      {
-        swap_lines = g_strsplit (swap_content, "\n", -1);
-        g_free (swap_content);
-        for (k = 0; swap_lines[k] != NULL; k++)
-          {
-            gchar *s = g_strstrip (swap_lines[k]);
-
-            if (s[0] == '\0')
-              continue;
-            if (g_str_has_prefix (s, "Filename"))
-              continue;
-            g_string_append (key, "swap:");
-            g_string_append (key, s);
-            g_string_append_c (key, '|');
-          }
-        g_strfreev (swap_lines);
-      }
-  }
+  mounts_key_fold_swaps (key);
   return g_string_free (key, FALSE);
 }
