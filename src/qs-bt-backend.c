@@ -151,6 +151,65 @@ typedef enum
   BT_FLAG_CONNECTED
 } BtFlagKind;
 
+/* Parses one `bluetoothctl devices` line. On success stores stripped
+ * MAC and name copies in `out_mac`/`out_name` (caller frees both)
+ * and returns TRUE. Returns FALSE for lines without a usable name:
+ * missing parts, empty name, name equal to MAC (case-insensitive)
+ * or "Unknown"/"(unknown)" placeholders (case-insensitive). */
+static gboolean
+bt_parse_device_line (const gchar  *line,
+                      gchar       **out_mac,
+                      gchar       **out_name)
+{
+  gchar    **parts;
+  gchar     *mac;
+  gchar     *name;
+
+  if (line == NULL)
+    return FALSE;
+  if (!g_str_has_prefix (line, "Device "))
+    return FALSE;
+  parts = g_strsplit (line, " ", 3);
+  if (parts[1] == NULL || parts[2] == NULL)
+    {
+      g_strfreev (parts);
+      return FALSE;
+    }
+  mac = g_strdup (parts[1]);
+  name = g_strdup (parts[2]);
+  g_strfreev (parts);
+  g_strstrip (mac);
+  g_strstrip (name);
+  if (*mac == '\0' || *name == '\0')
+    {
+      g_free (mac);
+      g_free (name);
+      return FALSE;
+    }
+  if (g_ascii_strcasecmp (name, mac) == 0)
+    {
+      g_free (mac);
+      g_free (name);
+      return FALSE;
+    }
+  if (g_ascii_strcasecmp (name, "Unknown") == 0
+      || g_ascii_strcasecmp (name, "(unknown)") == 0)
+    {
+      g_free (mac);
+      g_free (name);
+      return FALSE;
+    }
+  if (out_mac != NULL)
+    *out_mac = mac;
+  else
+    g_free (mac);
+  if (out_name != NULL)
+    *out_name = name;
+  else
+    g_free (name);
+  return TRUE;
+}
+
 /* Applies one filtered listing (`devices Paired|Trusted|Connected`) to `devs`,
  * creating entries that are not yet present and setting the matching flag.
  * This avoids per-device `info` calls, which dominate the load latency. */
@@ -178,28 +237,13 @@ bt_apply_filtered_devices (GList    **devs,
   lines = g_strsplit (output, "\n", -1);
   for (i = 0; lines[i] != NULL; i++)
     {
-      gchar    **parts;
-      const gchar *mac;
-      const gchar *name;
-      BtDevice  *dev = NULL;
-      GList     *l;
+      gchar      *mac = NULL;
+      gchar      *name = NULL;
+      BtDevice   *dev = NULL;
+      GList      *l;
 
-      if (!g_str_has_prefix (lines[i], "Device "))
+      if (!bt_parse_device_line (lines[i], &mac, &name))
         continue;
-      parts = g_strsplit (lines[i], " ", 3);
-      if (parts[1] == NULL || *parts[1] == '\0')
-        {
-          g_strfreev (parts);
-          continue;
-        }
-      if (parts[2] == NULL || *parts[2] == '\0'
-          || g_strcmp0 (parts[2], parts[1]) == 0)
-        {
-          g_strfreev (parts);
-          continue;
-        }
-      mac = parts[1];
-      name = parts[2];
 
       for (l = *devs; l != NULL; l = l->next)
         {
@@ -233,7 +277,8 @@ bt_apply_filtered_devices (GList    **devs,
           dev->connected = TRUE;
           break;
         }
-      g_strfreev (parts);
+      g_free (mac);
+      g_free (name);
     }
   g_strfreev (lines);
   g_free (output);
@@ -254,28 +299,18 @@ list_bt_devices (void)
       lines = g_strsplit (output, "\n", -1);
       for (i = 0; lines[i] != NULL; i++)
         {
-          gchar    **parts;
-          BtDevice  *dev;
+          gchar    *mac = NULL;
+          gchar    *name = NULL;
+          BtDevice *dev;
 
-          if (!g_str_has_prefix (lines[i], "Device "))
+          if (!bt_parse_device_line (lines[i], &mac, &name))
             continue;
-          parts = g_strsplit (lines[i], " ", 3);
-          if (parts[1] == NULL || *parts[1] == '\0')
-            {
-              g_strfreev (parts);
-              continue;
-            }
-          if (parts[2] == NULL || *parts[2] == '\0'
-              || g_strcmp0 (parts[2], parts[1]) == 0)
-            {
-              g_strfreev (parts);
-              continue;
-            }
           dev = g_new0 (BtDevice, 1);
-          dev->mac = g_strdup (parts[1]);
-          dev->name = g_strdup (parts[2]);
+          dev->mac = g_strdup (mac);
+          dev->name = g_strdup (name);
           devs = g_list_append (devs, dev);
-          g_strfreev (parts);
+          g_free (mac);
+          g_free (name);
         }
       g_strfreev (lines);
       g_free (output);

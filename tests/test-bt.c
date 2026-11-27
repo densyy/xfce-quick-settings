@@ -121,6 +121,58 @@ test_list (void)
   g_assert_true (!hs->paired && !hs->trusted && hs->connected);
   g_list_free_full (devs, bt_device_free);
   pop_path ();
+
+  /* Furos sem nome (base + listados filtrados): só o válido sobrevive. */
+  push_fakebin ();
+  g_setenv ("QS_FAKE_BT_DEVICES",
+            "Device AA:BB:CC:DD:EE:11\n"
+            "Device AA:BB:CC:DD:EE:12 AA:BB:CC:DD:EE:12\n"
+            "Device AA:BB:CC:DD:EE:13 \n"
+            "Device AA:BB:CC:DD:EE:14 aa:bb:cc:dd:ee:14\n"
+            "Device AA:BB:CC:DD:EE:15 Unknown\n"
+            "Device AA:BB:CC:DD:EE:16 (unknown)\n"
+            "Device AA:BB:CC:DD:EE:17    \n"
+            "Device AA:BB:CC:DD:EE:18\r\n"
+            "Device 11:22:33:44:55:66 Buds",
+            TRUE);
+  g_setenv ("QS_FAKE_BT_PAIRED",
+            "Device AA:BB:CC:DD:EE:21 Unknown\n"
+            "Device AA:BB:CC:DD:EE:22 aa:bb:cc:dd:ee:22",
+            TRUE);
+  g_setenv ("QS_FAKE_BT_TRUSTED",
+            "Device AA:BB:CC:DD:EE:23 \n"
+            "Device AA:BB:CC:DD:EE:24 (UNKNOWN)",
+            TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECTED",
+            "Device AA:BB:CC:DD:EE:25    \n"
+            "Device AA:BB:CC:DD:EE:26\r",
+            TRUE);
+  devs = list_bt_devices ();
+  g_assert_nonnull (devs);
+  g_assert_cmpuint (g_list_length (devs), ==, 1);
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:11"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:12"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:13"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:14"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:15"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:16"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:17"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:18"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:21"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:22"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:23"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:24"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:25"));
+  g_assert_null (find_dev (devs, "AA:BB:CC:DD:EE:26"));
+  kb = find_dev (devs, "11:22:33:44:55:66");
+  g_assert_nonnull (kb);
+  g_assert_cmpstr (kb->name, ==, "Buds");
+  g_list_free_full (devs, bt_device_free);
+  g_unsetenv ("QS_FAKE_BT_DEVICES");
+  g_unsetenv ("QS_FAKE_BT_PAIRED");
+  g_unsetenv ("QS_FAKE_BT_TRUSTED");
+  g_unsetenv ("QS_FAKE_BT_CONNECTED");
+  pop_path ();
 }
 
 static void

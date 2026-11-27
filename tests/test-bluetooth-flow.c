@@ -1434,7 +1434,27 @@ test_hide_nameless_devices (void)
   g_setenv ("QS_FAKE_BT_DEVICES",
             "Device AA:BB:CC:DD:EE:11\n"
             "Device AA:BB:CC:DD:EE:12 AA:BB:CC:DD:EE:12\n"
+            "Device AA:BB:CC:DD:EE:13 \n"
+            "Device AA:BB:CC:DD:EE:14 aa:bb:cc:dd:ee:14\n"
+            "Device AA:BB:CC:DD:EE:15 Unknown\n"
+            "Device AA:BB:CC:DD:EE:16 (unknown)\n"
+            "Device AA:BB:CC:DD:EE:17    \n"
+            "Device AA:BB:CC:DD:EE:18\r\n"
             "Device 11:22:33:44:55:66 Buds",
+            TRUE);
+  /* Rota bt_apply_filtered_devices: furos nos listados filtrados também
+   * precisam continuar ocultos. */
+  g_setenv ("QS_FAKE_BT_PAIRED",
+            "Device AA:BB:CC:DD:EE:21 Unknown\n"
+            "Device AA:BB:CC:DD:EE:22 aa:bb:cc:dd:ee:22",
+            TRUE);
+  g_setenv ("QS_FAKE_BT_TRUSTED",
+            "Device AA:BB:CC:DD:EE:23 \n"
+            "Device AA:BB:CC:DD:EE:24 (UNKNOWN)",
+            TRUE);
+  g_setenv ("QS_FAKE_BT_CONNECTED",
+            "Device AA:BB:CC:DD:EE:25    \n"
+            "Device AA:BB:CC:DD:EE:26\r",
             TRUE);
 
   bt_show_page (qs);
@@ -1442,6 +1462,18 @@ test_hide_nameless_devices (void)
   g_assert_cmpuint (bt_row_count (qs), ==, 1);
   g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:11"));
   g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:12"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:13"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:14"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:15"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:16"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:17"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:18"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:21"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:22"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:23"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:24"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:25"));
+  g_assert_null (find_row (qs, "AA:BB:CC:DD:EE:26"));
   row = find_row (qs, "11:22:33:44:55:66");
   g_assert_nonnull (row);
 
