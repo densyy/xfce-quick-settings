@@ -405,6 +405,10 @@ wifi_load_thread (gpointer data)
   w->list_out = run_command (cmd);
   g_free (cmd);
   w->radio_out = run_command ("nmcli radio wifi");
+  /* Pre-warm the saved-profile cache off the UI thread so the
+   * row-activated lookup hits for saved networks on first click.
+   * Unknown SSIDs stay unsaved (safe default: password prompt). */
+  wifi_saved_refresh_sync ();
   g_idle_add (wifi_load_idle, w);
   return NULL;
 }

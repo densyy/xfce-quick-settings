@@ -777,16 +777,23 @@ test_connect_open_commands (void)
   activate_row (f->qs, open);
   g_assert_true (wait_log ("device wifi connect Open", 10000));
   run_loop_ms (300);
-  g_assert_cmpuint (log_count ("connection show"), ==, 1);
+  /* Load pre-warm + reload pós-connect: 2 queries de perfis. Antes do
+   * pre-warm no load worker (D-003) este total era 1. */
+  g_assert_cmpuint (log_count ("connection show"), ==, 2);
   g_assert_false (f->qs->scanning_wifi);
 
   g_setenv ("QS_FAKE_NMCLI_PROFILES", "Open:802-11-wireless\n", TRUE);
+  /* Perfil criado fora da janela do reload pós-connect: o snapshot
+   * pre-warmed ainda não o contém (TTL 60s), então invalida para o worker
+   * reconsultar, como faria após expirar. */
+  wifi_free_cache ();
   open = find_row (f->qs, "Open");
   g_assert_nonnull (open);
   activate_row (f->qs, open);
   g_assert_true (wait_log ("connection up Open", 10000));
   run_loop_ms (300);
-  g_assert_cmpuint (log_count ("connection show"), ==, 2);
+  /* #3 worker re-query após invalidação + #4 reload pós-connect. */
+  g_assert_cmpuint (log_count ("connection show"), ==, 4);
   g_assert_false (f->qs->scanning_wifi);
   fixture_clear (f);
   g_free (f);
@@ -820,6 +827,67 @@ test_connect_saved_cache_hit (void)
   g_assert_false (log_contains ("Wi-Fi password"));
   run_loop_ms (2500);
   g_assert_false (f->qs->scanning_wifi);
+  fixture_clear (f);
+  g_free (f);
+}
+
+static void
+test_connect_saved_first_click_no_dialog (void)
+{
+  Fixture *f;
+  GtkWidget *casa;
+
+  if (skip_no_display ())
+    return;
+  reset_env ();
+  /* Cold start: sem o pre-warm do load worker o cache segue inválido e o
+   * primeiro clique numa rede salva abriria o dialog de senha (D-003). */
+  wifi_free_cache ();
+  g_setenv ("QS_FAKE_NMCLI_LIST", ":Casa:70:WPA2\n", TRUE);
+  g_setenv ("QS_FAKE_NMCLI_PROFILES", "Casa:802-11-wireless\n", TRUE);
+  f = g_new0 (Fixture, 1);
+  fixture_init (f);
+  wifi_show_page (f->qs);
+  casa = wait_row (f->qs, "Casa");
+  g_assert_nonnull (casa);
+  /* O load pre-warmou o saved-set off-UI antes de pintar a lista. */
+  g_assert_true (wait_log ("connection show", 10000));
+  g_remove (log_path);
+  /* Clique sem senha: rede salva não pode abrir dialog. O probe CANCEL só
+   * existe para não travar se o dialog abrir (e aí nenhum up acontece). */
+  activate_with_dialog (f->qs, casa, GTK_RESPONSE_CANCEL, NULL);
+  g_assert_true (wait_log ("connection up Casa", 10000));
+  g_assert_false (log_contains ("device wifi connect Casa"));
+  run_loop_ms (300);
+  g_assert_false (f->qs->scanning_wifi);
+  fixture_clear (f);
+  g_free (f);
+}
+
+static void
+test_connect_unknown_prompts_password (void)
+{
+  Fixture *f;
+  GtkWidget *nova;
+
+  if (skip_no_display ())
+    return;
+  reset_env ();
+  wifi_free_cache ();
+  g_setenv ("QS_FAKE_NMCLI_LIST", ":Nova:60:WPA2\n", TRUE);
+  /* Sem QS_FAKE_NMCLI_PROFILES: SSID desconhecido mesmo após o pre-warm. */
+  f = g_new0 (Fixture, 1);
+  fixture_init (f);
+  wifi_show_page (f->qs);
+  nova = wait_row (f->qs, "Nova");
+  g_assert_nonnull (nova);
+  g_assert_true (wait_log ("connection show", 10000));
+  g_remove (log_path);
+  activate_with_dialog (f->qs, nova, GTK_RESPONSE_ACCEPT, "s3cret");
+  g_assert_true (wait_log ("device wifi connect Nova password s3cret",
+                           10000));
+  g_assert_false (log_contains ("connection up Nova"));
+  run_loop_ms (300);
   fixture_clear (f);
   g_free (f);
 }
@@ -982,6 +1050,10 @@ main (int argc, char **argv)
                    test_connect_open_commands);
   g_test_add_func ("/wifi/flow/connect_saved_cache_hit",
                    test_connect_saved_cache_hit);
+  g_test_add_func ("/wifi/flow/connect_saved_first_click_no_dialog",
+                   test_connect_saved_first_click_no_dialog);
+  g_test_add_func ("/wifi/flow/connect_unknown_prompts_password",
+                   test_connect_unknown_prompts_password);
   g_test_add_func ("/wifi/flow/connect_password_saved",
                    test_connect_password_saved);
   g_test_add_func ("/wifi/flow/connect_password_new",
