@@ -45,4 +45,19 @@ void bt_build_page (GtkWidget     *stack,
 void bt_free_caches (void);
 void bt_cancel_all (void);
 
+/* --- Bluetooth row actions (TASK-007, RF-006/RF-007), used by tests --- */
+/* Trust standalone da row: executa o verbo trust em thread e recarrega
+ * via `info` para confirmar o Trusted yes persistido. */
+void bt_trust_row (QuickSettings *qs,
+                   GtkListBoxRow *row);
+/* Rename da row: dialogo coleta o alias e delega a bt_rename_apply. */
+void bt_rename_row (QuickSettings *qs,
+                    GtkListBoxRow *row);
+/* Nucleo do rename sem dialogo (testavel): primario
+ * `bluetoothctl --timeout 5 set-alias` com fallback D-Bus
+ * org.freedesktop.DBus.Properties.Set org.bluez.Device1 Alias. */
+void bt_rename_apply (QuickSettings *qs,
+                      const gchar   *mac,
+                      const gchar   *alias);
+
 #endif /* QS_NET_H */

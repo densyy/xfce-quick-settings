@@ -1,6 +1,7 @@
 #include "qs-bt-backend.h"
 #include "qs-util.h"
 
+#include <gio/gio.h>
 #include <string.h>
 
 void
@@ -440,4 +441,285 @@ bt_signal_event_matches (const gchar *object_path,
   if (connected)
     return BT_SIGNAL_CONNECTED_TRUE;
   return BT_SIGNAL_CONNECTED_FALSE;
+}
+
+/* --- Trust standalone (RF-006) and rename (RF-007) ---
+ * Helpers never touch GTK. MAC and alias are validated and
+ * shell-quoted; outputs are classified with bt_str_contains_ci so
+ * AlreadyExists counts as success and auth/agent failures keep
+ * their own codes for UI feedback. */
+
+gboolean
+bt_mac_is_valid (const gchar *mac)
+{
+  gint i;
+
+  if (mac == NULL)
+    return FALSE;
+  if (strlen (mac) != 17)
+    return FALSE;
+  for (i = 0; i < 17; i++)
+    {
+      gchar c = mac[i];
+
+      if (i % 3 == 2)
+        {
+          if (c != ':')
+            return FALSE;
+        }
+      else if (!g_ascii_isxdigit (c))
+        return FALSE;
+    }
+  return TRUE;
+}
+
+gboolean
+bt_alias_is_valid (const gchar *alias)
+{
+  gchar  *copy;
+  gchar  *stripped;
+  gsize   len;
+  gboolean ok = FALSE;
+
+  if (alias == NULL)
+    return FALSE;
+  copy = g_strdup (alias);
+  stripped = g_strstrip (copy);
+  len = strlen (stripped);
+  if (len == 0 || len > 128)
+    {
+      g_free (copy);
+      return FALSE;
+    }
+  if (strchr (stripped, '\n') != NULL || strchr (stripped, '\r') != NULL)
+    {
+      g_free (copy);
+      return FALSE;
+    }
+  ok = TRUE;
+  g_free (copy);
+  return ok;
+}
+
+gchar *
+bt_build_trust_command (const gchar *mac)
+{
+  gchar *mac_q = NULL;
+  gchar *cmd = NULL;
+
+  if (!bt_mac_is_valid (mac))
+    return NULL;
+  mac_q = g_shell_quote (mac);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 5 trust %s", mac_q);
+  g_free (mac_q);
+  return cmd;
+}
+
+gchar *
+bt_build_rename_command (const gchar *mac,
+                         const gchar *alias)
+{
+  gchar *mac_q = NULL;
+  gchar *alias_q = NULL;
+  gchar *cmd = NULL;
+
+  if (!bt_mac_is_valid (mac) || !bt_alias_is_valid (alias))
+    return NULL;
+  mac_q = g_shell_quote (mac);
+  alias_q = g_shell_quote (alias);
+  cmd = g_strdup_printf ("bluetoothctl --timeout 5 set-alias %s %s",
+                         mac_q, alias_q);
+  g_free (mac_q);
+  g_free (alias_q);
+  return cmd;
+}
+
+BtTrustStatus
+bt_classify_trust_output (const gchar *output,
+                          const gchar *errout)
+{
+  if (bt_str_contains_ci (output, "successful")
+      || bt_str_contains_ci (errout, "successful")
+      || bt_str_contains_ci (output, "succeeded")
+      || bt_str_contains_ci (errout, "succeeded")
+      || bt_str_contains_ci (output, "alreadyexists")
+      || bt_str_contains_ci (errout, "alreadyexists"))
+    return BT_TRUST_OK;
+  if (bt_str_contains_ci (output, "authenticationfailed")
+      || bt_str_contains_ci (errout, "authenticationfailed")
+      || bt_str_contains_ci (output, "authentication failed")
+      || bt_str_contains_ci (errout, "authentication failed"))
+    return BT_TRUST_AUTH_FAILED;
+  if (bt_str_contains_ci (output, "no agent")
+      || bt_str_contains_ci (errout, "no agent"))
+    return BT_TRUST_NO_AGENT;
+  return BT_TRUST_FAILED;
+}
+
+BtRenameStatus
+bt_classify_rename_output (const gchar *output,
+                            const gchar *errout)
+{
+  if (bt_str_contains_ci (output, "successful")
+      || bt_str_contains_ci (errout, "successful")
+      || bt_str_contains_ci (output, "succeeded")
+      || bt_str_contains_ci (errout, "succeeded")
+      || bt_str_contains_ci (output, "alreadyexists")
+      || bt_str_contains_ci (errout, "alreadyexists")
+      || bt_str_contains_ci (output, "changed")
+      || bt_str_contains_ci (errout, "changed"))
+    return BT_RENAME_OK;
+  if (bt_str_contains_ci (output, "authenticationfailed")
+      || bt_str_contains_ci (errout, "authenticationfailed")
+      || bt_str_contains_ci (output, "authentication failed")
+      || bt_str_contains_ci (errout, "authentication failed"))
+    return BT_RENAME_AUTH_FAILED;
+  if (bt_str_contains_ci (output, "no agent")
+      || bt_str_contains_ci (errout, "no agent"))
+    return BT_RENAME_NO_AGENT;
+  if (bt_str_contains_ci (output, "no such device")
+      || bt_str_contains_ci (errout, "no such device")
+      || bt_str_contains_ci (output, "not available")
+      || bt_str_contains_ci (errout, "not available")
+      || bt_str_contains_ci (output, "unknown device")
+      || bt_str_contains_ci (errout, "unknown device"))
+    return BT_RENAME_NO_DEVICE;
+  return BT_RENAME_FAILED;
+}
+
+BtTrustStatus
+bt_trust_device (const gchar *mac)
+{
+  gchar         *cmd = NULL;
+  gchar         *output = NULL;
+  gchar         *errout = NULL;
+  gint           status = 0;
+  gboolean       spawned = FALSE;
+  BtTrustStatus  result = BT_TRUST_FAILED;
+
+  cmd = bt_build_trust_command (mac);
+  if (cmd == NULL)
+    return BT_TRUST_FAILED;
+  spawned = g_spawn_command_line_sync (cmd, &output, &errout,
+                                       &status, NULL);
+  g_free (cmd);
+  if (!spawned)
+    {
+      g_free (output);
+      g_free (errout);
+      return BT_TRUST_FAILED;
+    }
+  result = bt_classify_trust_output (output, errout);
+  g_free (output);
+  g_free (errout);
+  return result;
+}
+
+gboolean
+bt_rename_via_dbus (const gchar *mac,
+                    const gchar *alias,
+                    GError     **error)
+{
+  GDBusConnection *conn = NULL;
+  GVariant        *params = NULL;
+  GVariant        *result = NULL;
+  gchar           *path = NULL;
+  gchar            dev[33];
+  gsize            j = 0;
+  const gchar     *s;
+
+  if (!bt_mac_is_valid (mac) || !bt_alias_is_valid (alias))
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                   "bt_rename_via_dbus: invalid mac or alias");
+      return FALSE;
+    }
+  for (s = mac; *s != '\0'; s++)
+    {
+      if (*s == ':')
+        {
+          if (j >= sizeof (dev) - 1)
+            break;
+          dev[j++] = '_';
+        }
+      else
+        {
+          if (j >= sizeof (dev) - 1)
+            break;
+          dev[j++] = (gchar) g_ascii_toupper (*s);
+        }
+    }
+  dev[j] = '\0';
+  path = g_strdup_printf ("/org/bluez/hci0/dev_%s", dev);
+  conn = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, error);
+  if (conn == NULL)
+    {
+      g_free (path);
+      return FALSE;
+    }
+  params = g_variant_new ("(ssv)",
+                          "org.bluez.Device1",
+                          "Alias",
+                          g_variant_new_string (alias));
+  result = g_dbus_connection_call_sync (conn,
+                                        "org.bluez",
+                                        path,
+                                        "org.freedesktop.DBus.Properties",
+                                        "Set",
+                                        params,
+                                        NULL,
+                                        G_DBUS_CALL_FLAGS_NONE,
+                                        5000,
+                                        NULL,
+                                        error);
+  g_free (path);
+  g_object_unref (conn);
+  if (result == NULL)
+    return FALSE;
+  g_variant_unref (result);
+  return TRUE;
+}
+
+BtRenameDbusFn bt_rename_dbus_fn = bt_rename_via_dbus;
+
+void
+bt_rename_set_dbus_fn (BtRenameDbusFn fn)
+{
+  if (fn == NULL)
+    bt_rename_dbus_fn = bt_rename_via_dbus;
+  else
+    bt_rename_dbus_fn = fn;
+}
+
+BtRenameStatus
+bt_rename_device (const gchar *mac,
+                  const gchar *alias)
+{
+  gchar          *cmd = NULL;
+  gchar          *output = NULL;
+  gchar          *errout = NULL;
+  gint            status = 0;
+  gboolean        spawned = FALSE;
+  BtRenameStatus  primary = BT_RENAME_FAILED;
+
+  cmd = bt_build_rename_command (mac, alias);
+  if (cmd == NULL)
+    return BT_RENAME_FAILED;
+  spawned = g_spawn_command_line_sync (cmd, &output, &errout,
+                                       &status, NULL);
+  g_free (cmd);
+  if (!spawned)
+    {
+      g_free (output);
+      g_free (errout);
+      return BT_RENAME_FAILED;
+    }
+  primary = bt_classify_rename_output (output, errout);
+  g_free (output);
+  g_free (errout);
+  if (primary == BT_RENAME_OK)
+    return BT_RENAME_OK;
+  if (bt_rename_dbus_fn != NULL && bt_rename_dbus_fn (mac, alias, NULL))
+    return BT_RENAME_OK;
+  return primary;
 }

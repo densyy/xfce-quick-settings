@@ -7,7 +7,7 @@
 /* Plugin version (single source of truth). Bumped on every AI change:
  * new feature/test -> MINOR (1.x.0), fix/docs -> PATCH (1.0.x).
  * See AGENTS.md. */
-#define QS_VERSION "1.8.0"
+#define QS_VERSION "1.9.0"
 
 /* Plugin state shared by all modules. Widgets are created by each
  * module's build function and refreshed by its refresh function. */

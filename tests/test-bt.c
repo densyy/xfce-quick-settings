@@ -5,7 +5,12 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
+#include "qs-bt-agent.h"
 #include "qs-bt-backend.h"
+#include "qs-bt-signal.h"
+#include "qs-util.h"
+
+#include "bt-signal-helper.h"
 
 static gchar *saved_path = NULL;
 
@@ -407,6 +412,373 @@ test_dash_mac_filter (void)
   pop_path ();
 }
 
+static void
+test_pair_fail (void)
+{
+  gchar *output;
+
+  push_fakebin ();
+  output = run_command ("bluetoothctl --timeout 1 pair 11:22:33:44:55:66");
+  g_assert_nonnull (output);
+  g_assert_false (bt_output_is_error (output, ""));
+  g_assert_true (strstr (output, "Pairing successful") != NULL);
+  g_free (output);
+
+  g_setenv ("QS_FAKE_BT_PAIR_FAIL", "1", TRUE);
+  output = run_command ("bluetoothctl --timeout 1 pair 11:22:33:44:55:66");
+  g_assert_nonnull (output);
+  g_assert_true (bt_output_is_error (output, ""));
+  g_free (output);
+  g_unsetenv ("QS_FAKE_BT_PAIR_FAIL");
+
+  /* Em stderr o run_command descarta o texto: prova pelo log do verbo. */
+  g_setenv ("QS_FAKE_BT_PAIR_FAIL", "2", TRUE);
+  output = run_command ("bluetoothctl --timeout 1 pair 11:22:33:44:55:66");
+  g_assert_true (output == NULL || strstr (output, "successful") == NULL);
+  g_free (output);
+  g_unsetenv ("QS_FAKE_BT_PAIR_FAIL");
+  pop_path ();
+}
+
+static void
+test_trust_verb (void)
+{
+  const gchar *log = "/tmp/qs-test-bt-trust.log";
+  gchar       *output;
+  gchar       *text = NULL;
+
+  push_fakebin ();
+  g_setenv ("QS_FAKE_LOG", log, TRUE);
+  g_remove (log);
+  output = run_command ("bluetoothctl --timeout 1 trust 11:22:33:44:55:66");
+  g_assert_nonnull (output);
+  g_assert_false (bt_output_is_error (output, ""));
+  g_assert_true (strstr (output, "trust succeeded") != NULL);
+  g_free (output);
+  g_assert_true (g_file_get_contents (log, &text, NULL, NULL));
+  g_assert_true (strstr (text, "trust 11:22:33:44:55:66") != NULL);
+  g_free (text);
+  text = NULL;
+
+  g_setenv ("QS_FAKE_BT_TRUST_FAIL", "1", TRUE);
+  output = run_command ("bluetoothctl --timeout 1 trust 11:22:33:44:55:66");
+  g_assert_nonnull (output);
+  g_assert_true (bt_output_is_error (output, ""));
+  g_free (output);
+  g_unsetenv ("QS_FAKE_BT_TRUST_FAIL");
+
+  g_setenv ("QS_FAKE_BT_TRUST_FAIL", "2", TRUE);
+  output = run_command ("bluetoothctl --timeout 1 trust 11:22:33:44:55:66");
+  g_assert_true (output == NULL || strstr (output, "succeeded") == NULL);
+  g_free (output);
+  g_unsetenv ("QS_FAKE_BT_TRUST_FAIL");
+
+  g_unsetenv ("QS_FAKE_LOG");
+  g_remove (log);
+  pop_path ();
+}
+
+static void
+test_alias_verb (void)
+{
+  const gchar *log = "/tmp/qs-test-bt-alias.log";
+  gchar       *output;
+  gchar       *text = NULL;
+
+  push_fakebin ();
+  g_setenv ("QS_FAKE_LOG", log, TRUE);
+  g_remove (log);
+  output = run_command (
+    "bluetoothctl --timeout 5 set-alias 11:22:33:44:55:66 NewName");
+  g_assert_nonnull (output);
+  g_assert_false (bt_output_is_error (output, ""));
+  g_assert_true (strstr (output, "alias succeeded") != NULL);
+  g_free (output);
+  g_assert_true (g_file_get_contents (log, &text, NULL, NULL));
+  g_assert_true (strstr (text, "set-alias 11:22:33:44:55:66") != NULL);
+  g_free (text);
+  text = NULL;
+
+  g_setenv ("QS_FAKE_BT_ALIAS_FAIL", "1", TRUE);
+  output = run_command (
+    "bluetoothctl --timeout 5 set-alias 11:22:33:44:55:66 NewName");
+  g_assert_nonnull (output);
+  g_assert_true (bt_output_is_error (output, ""));
+  g_free (output);
+  g_unsetenv ("QS_FAKE_BT_ALIAS_FAIL");
+
+  g_setenv ("QS_FAKE_BT_ALIAS_FAIL", "2", TRUE);
+  output = run_command (
+    "bluetoothctl --timeout 5 set-alias 11:22:33:44:55:66 NewName");
+  g_assert_true (output == NULL || strstr (output, "succeeded") == NULL);
+  g_free (output);
+  g_unsetenv ("QS_FAKE_BT_ALIAS_FAIL");
+
+  g_unsetenv ("QS_FAKE_LOG");
+  g_remove (log);
+  pop_path ();
+}
+
+static void
+test_page_dict_match (void)
+{
+  GVariant *dict = bt_helper_page_dict (TRUE, TRUE);
+  BtSignalMatch m;
+
+  /* A chave extra Paired nao quebra o casamento de Connected. */
+  m = bt_signal_event_matches ("/org/bluez/hci0/dev_11_22_33_44_55_66",
+                               "11:22:33:44:55:66", dict);
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_TRUE);
+  g_variant_unref (dict);
+  dict = bt_helper_page_dict (TRUE, FALSE);
+  m = bt_signal_event_matches ("/org/bluez/hci0/dev_11_22_33_44_55_66",
+                               "11:22:33:44:55:66", dict);
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_FALSE);
+  g_variant_unref (dict);
+  dict = bt_helper_page_dict (FALSE, TRUE);
+  m = bt_signal_event_matches ("/org/bluez/hci1/dev_11_22_33_44_55_66",
+                               "11:22:33:44:55:66", dict);
+  g_assert_cmpint (m, ==, BT_SIGNAL_CONNECTED_TRUE);
+  g_variant_unref (dict);
+  dict = bt_helper_page_dict (TRUE, TRUE);
+  m = bt_signal_event_matches ("/org/bluez/hci0/dev_AA_AA_AA_AA_AA_01",
+                               "11:22:33:44:55:66", dict);
+  g_assert_cmpint (m, ==, BT_SIGNAL_NO_MATCH);
+  g_variant_unref (dict);
+}
+
+static gchar *emit_last_path = NULL;
+static gboolean emit_got_paired = FALSE;
+static gboolean emit_got_connected = FALSE;
+static gboolean emit_called = FALSE;
+
+static gboolean
+lookup_bool (GVariant    *dict,
+             const gchar *key,
+             gboolean    *out)
+{
+  GVariant *val;
+  gboolean  ok = FALSE;
+
+  if (dict == NULL || key == NULL || out == NULL)
+    return FALSE;
+  val = g_variant_lookup_value (dict, key, NULL);
+  if (val == NULL)
+    return FALSE;
+  if (g_variant_is_of_type (val, G_VARIANT_TYPE_VARIANT))
+    {
+      GVariant *inner = g_variant_get_variant (val);
+
+      if (g_variant_is_of_type (inner, G_VARIANT_TYPE_BOOLEAN))
+        {
+          *out = g_variant_get_boolean (inner);
+          ok = TRUE;
+        }
+      g_variant_unref (inner);
+    }
+  else if (g_variant_is_of_type (val, G_VARIANT_TYPE_BOOLEAN))
+    {
+      *out = g_variant_get_boolean (val);
+      ok = TRUE;
+    }
+  g_variant_unref (val);
+  return ok;
+}
+
+static void
+page_emit_cb (const gchar *object_path,
+              GVariant    *changed,
+              const gchar *sender_name,
+              gpointer     user_data)
+{
+  gboolean v = FALSE;
+
+  (void) sender_name;
+  (void) user_data;
+  emit_called = TRUE;
+  g_free (emit_last_path);
+  emit_last_path = g_strdup (object_path);
+  if (lookup_bool (changed, "Paired", &v))
+    emit_got_paired = v;
+  if (lookup_bool (changed, "Connected", &v))
+    emit_got_connected = v;
+}
+
+static void
+test_page_properties_emit (void)
+{
+  BtSignalWatch *watch;
+
+  watch = bt_signal_watch_new_for_test (page_emit_cb, NULL);
+  g_assert_nonnull (watch);
+  emit_called = FALSE;
+  emit_got_paired = FALSE;
+  emit_got_connected = FALSE;
+  g_free (emit_last_path);
+  emit_last_path = NULL;
+  bt_helper_emit_page_properties (watch, "11:22:33:44:55:66", TRUE, TRUE);
+  g_assert_true (emit_called);
+  g_assert_cmpstr (emit_last_path, ==,
+                   "/org/bluez/hci0/dev_11_22_33_44_55_66");
+  g_assert_true (emit_got_paired);
+  g_assert_true (emit_got_connected);
+  bt_signal_unsubscribe (watch);
+
+  emit_called = FALSE;
+  emit_got_paired = TRUE;
+  emit_got_connected = TRUE;
+  watch = bt_signal_watch_new_for_test (page_emit_cb, NULL);
+  g_assert_nonnull (watch);
+  bt_helper_emit_page_properties (watch, "11:22:33:44:55:66", FALSE, FALSE);
+  g_assert_true (emit_called);
+  g_assert_false (emit_got_paired);
+  g_assert_false (emit_got_connected);
+  bt_signal_unsubscribe (watch);
+  g_free (emit_last_path);
+  emit_last_path = NULL;
+
+  /* NULL-safe: nada acontece e nada aborta. */
+  bt_helper_emit_page_properties (NULL, "11:22:33:44:55:66", TRUE, TRUE);
+  watch = bt_signal_watch_new_for_test (page_emit_cb, NULL);
+  g_assert_nonnull (watch);
+  bt_helper_emit_page_properties (watch, NULL, TRUE, TRUE);
+  bt_signal_unsubscribe (watch);
+}
+
+static void
+test_trust_helpers (void)
+{
+  gchar *cmd;
+
+  g_assert_true (bt_mac_is_valid ("11:22:33:44:55:66"));
+  g_assert_false (bt_mac_is_valid (NULL));
+  g_assert_false (bt_mac_is_valid ("curto"));
+  g_assert_false (bt_mac_is_valid ("11:22:33:44:55:6G"));
+  g_assert_false (bt_mac_is_valid ("11-22-33-44-55-66"));
+  cmd = bt_build_trust_command ("11:22:33:44:55:66");
+  g_assert_nonnull (cmd);
+  g_assert_true (strstr (cmd, "trust") != NULL);
+  g_assert_true (strstr (cmd, "--timeout 5") != NULL);
+  g_free (cmd);
+  g_assert_null (bt_build_trust_command (NULL));
+  g_assert_null (bt_build_trust_command ("invalido"));
+  g_assert_cmpint (bt_classify_trust_output (
+    "Pairing successful", ""), ==, BT_TRUST_OK);
+  g_assert_cmpint (bt_classify_trust_output (
+    "Failed to pair: AlreadyExists", ""), ==, BT_TRUST_OK);
+  g_assert_cmpint (bt_classify_trust_output (
+    "Failed: authentication failed", ""), ==, BT_TRUST_AUTH_FAILED);
+  g_assert_cmpint (bt_classify_trust_output (
+    "No agent available", ""), ==, BT_TRUST_NO_AGENT);
+  g_assert_cmpint (bt_classify_trust_output (
+    "Failed to trust", ""), ==, BT_TRUST_FAILED);
+
+  push_fakebin ();
+  g_assert_cmpint (bt_trust_device ("11:22:33:44:55:66"), ==, BT_TRUST_OK);
+  g_setenv ("QS_FAKE_BT_TRUST_FAIL", "1", TRUE);
+  g_assert_cmpint (bt_trust_device ("11:22:33:44:55:66"), ==,
+                   BT_TRUST_FAILED);
+  g_unsetenv ("QS_FAKE_BT_TRUST_FAIL");
+  g_assert_cmpint (bt_trust_device (NULL), ==, BT_TRUST_FAILED);
+  pop_path ();
+}
+
+static void
+test_rename_helpers (void)
+{
+  gchar *cmd;
+
+  g_assert_true (bt_alias_is_valid ("FoneNovo"));
+  g_assert_false (bt_alias_is_valid (NULL));
+  g_assert_false (bt_alias_is_valid ("   "));
+  g_assert_false (bt_alias_is_valid ("com\nquebra"));
+  cmd = bt_build_rename_command ("11:22:33:44:55:66", "Fone Novo");
+  g_assert_nonnull (cmd);
+  g_assert_true (strstr (cmd, "set-alias") != NULL);
+  g_assert_true (strstr (cmd, "--timeout 5") != NULL);
+  g_free (cmd);
+  g_assert_null (bt_build_rename_command (NULL, "x"));
+  g_assert_null (bt_build_rename_command ("11:22:33:44:55:66", NULL));
+  g_assert_cmpint (bt_classify_rename_output (
+    "Changing alias succeeded", ""), ==, BT_RENAME_OK);
+  g_assert_cmpint (bt_classify_rename_output (
+    "Failed: authentication failed", ""), ==, BT_RENAME_AUTH_FAILED);
+  g_assert_cmpint (bt_classify_rename_output (
+    "No agent available", ""), ==, BT_RENAME_NO_AGENT);
+  g_assert_cmpint (bt_classify_rename_output (
+    "No such device", ""), ==, BT_RENAME_NO_DEVICE);
+  g_assert_cmpint (bt_classify_rename_output (
+    "Failed to set alias", ""), ==, BT_RENAME_FAILED);
+
+  push_fakebin ();
+  g_assert_cmpint (bt_rename_device ("11:22:33:44:55:66", "FoneNovo"),
+                   ==, BT_RENAME_OK);
+  g_assert_cmpint (bt_rename_device (NULL, "x"), ==, BT_RENAME_FAILED);
+  g_assert_cmpint (bt_rename_device ("11:22:33:44:55:66", NULL),
+                   ==, BT_RENAME_FAILED);
+  pop_path ();
+}
+
+static gboolean
+stub_rename_dbus_ok (const gchar *mac,
+                     const gchar *alias,
+                     GError     **error)
+{
+  (void) mac;
+  (void) alias;
+  (void) error;
+  return TRUE;
+}
+
+static void
+test_rename_fallback_named (void)
+{
+  BtRenameStatus st;
+  GError        *error = NULL;
+
+  push_fakebin ();
+  g_setenv ("QS_FAKE_BT_ALIAS_FAIL", "1", TRUE);
+  bt_rename_set_dbus_fn (stub_rename_dbus_ok);
+  st = bt_rename_device ("11:22:33:44:55:66", "FoneFallback");
+  g_assert_cmpint (st, ==, BT_RENAME_OK);
+  bt_rename_set_dbus_fn (NULL);
+  g_unsetenv ("QS_FAKE_BT_ALIAS_FAIL");
+  g_assert_false (bt_rename_via_dbus (NULL, "x", &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+  g_assert_false (bt_rename_via_dbus ("11:22:33:44:55:66", "  ", &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+  pop_path ();
+}
+
+static void
+test_agent_path_matches (void)
+{
+  gchar *target;
+
+  target = qs_bt_agent_device_path_for_mac ("11:22:33:44:55:66");
+  g_assert_nonnull (target);
+  g_assert_cmpstr (target, ==,
+                   "/org/bluez/hci0/dev_11_22_33_44_55_66");
+  g_assert_true (qs_bt_agent_path_matches (
+    target, "/org/bluez/hci0/dev_11_22_33_44_55_66"));
+  g_assert_true (qs_bt_agent_path_matches (
+    target, "/org/bluez/hci1/dev_11_22_33_44_55_66"));
+  g_assert_false (qs_bt_agent_path_matches (
+    target, "/org/bluez/hci0/dev_AA_AA_AA_AA_AA_01"));
+  g_assert_false (qs_bt_agent_path_matches (target, NULL));
+  g_assert_false (qs_bt_agent_path_matches (NULL, target));
+  g_assert_false (qs_bt_agent_path_matches ("", ""));
+  g_assert_false (qs_bt_agent_is_target (
+    NULL, "/org/bluez/hci0/dev_11_22_33_44_55_66"));
+  g_assert_null (qs_bt_agent_device_path_for_mac (NULL));
+  g_assert_null (qs_bt_agent_device_path_for_mac ("curto"));
+  g_assert_null (qs_bt_agent_device_path_for_mac ("11-22-33-44-55-66"));
+  g_assert_null (qs_bt_agent_get_target (NULL));
+  g_free (target);
+}
+
 gint
 main (gint argc, gchar **argv)
 {
@@ -429,5 +801,14 @@ main (gint argc, gchar **argv)
   g_test_add_func ("/bt/signal_wrong_type", test_signal_wrong_type);
   g_test_add_func ("/bt/signal_nulls", test_signal_nulls);
   g_test_add_func ("/bt/dash_mac_filter", test_dash_mac_filter);
+  g_test_add_func ("/bt/pair_fail", test_pair_fail);
+  g_test_add_func ("/bt/trust_verb", test_trust_verb);
+  g_test_add_func ("/bt/alias_verb", test_alias_verb);
+  g_test_add_func ("/bt/page_dict_match", test_page_dict_match);
+  g_test_add_func ("/bt/page_properties_emit", test_page_properties_emit);
+  g_test_add_func ("/bt/trust_helpers", test_trust_helpers);
+  g_test_add_func ("/bt/rename_helpers", test_rename_helpers);
+  g_test_add_func ("/bt/rename_fallback", test_rename_fallback_named);
+  g_test_add_func ("/bt/agent_path", test_agent_path_matches);
   return g_test_run ();
 }

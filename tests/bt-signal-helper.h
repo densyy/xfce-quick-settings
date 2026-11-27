@@ -22,6 +22,12 @@
  * estado (QS_FAKE_BT_STATE) e loga argv (QS_FAKE_LOG); o evento sempre
  * vem deste helper.
  *
+ * Para o watch persistente da pagina (TASK-001, RF-001), use
+ * bt_helper_emit_page_properties: ela emite Paired mais Connected no
+ * watch capturado via bt_signal_subscribe_fn, sem barramento, sem loop
+ * principal e sem D-Bus. Sem emissao, a row permanece inalterada (sinal
+ * de falha do teste da TASK-009).
+ *
  * Uso: inclua "bt-signal-helper.h" no teste e chame uma das funcoes com
  * um watch criado por bt_signal_watch_new_for_test. Header-only (static
  * inline): nenhum alvo de build muda e tests/run-tests.sh continua
@@ -81,6 +87,24 @@ bt_helper_empty_dict (void)
   return g_variant_builder_end (&builder);
 }
 
+/* Monta o dicionario a{sv} de pagina com as chaves Paired e Connected.
+ * Referencia nova; o chamador libera com g_variant_unref apos o emit.
+ * A chave extra Paired nao altera o casamento puro de Connected: ele
+ * continua classificando por BT_SIGNAL_CONNECTED_TRUE/FALSE. */
+static inline GVariant *
+bt_helper_page_dict (gboolean paired,
+                     gboolean connected)
+{
+  GVariantBuilder builder;
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add (&builder, "{sv}", "Paired",
+                         g_variant_new_boolean (paired));
+  g_variant_builder_add (&builder, "{sv}", "Connected",
+                         g_variant_new_boolean (connected));
+  return g_variant_builder_end (&builder);
+}
+
 /* Emite Connected no object path dado, com sender ":1.fake". Nao faz
  * nada quando watch ou object_path e NULL. */
 static inline void
@@ -126,6 +150,39 @@ bt_helper_emit_without_connected (BtSignalWatch *watch,
     return;
   path = bt_helper_object_path_for_mac (mac);
   dict = bt_helper_empty_dict ();
+  bt_signal_test_emit (watch, path, dict, ":1.fake");
+  g_variant_unref (dict);
+  g_free (path);
+}
+
+/* Emite Paired mais Connected no watch persistente da pagina.
+ *
+ * Parametros:
+ *   watch     watch capturado via bt_signal_subscribe_fn (o watch da
+ *             pagina da TASK-001) ou criado com
+ *             bt_signal_watch_new_for_test; NULL nao faz nada.
+ *   mac       MAC em AA:BB:CC:DD:EE:FF, usado para derivar o object path
+ *             /org/bluez/hci0/dev_MAC; NULL nao faz nada.
+ *   paired    valor da chave Paired no dicionario emitido.
+ *   connected valor da chave Connected no dicionario emitido.
+ *
+ * A emissao e sincrona, sem barramento, sem loop principal e sem D-Bus:
+ * invoca o callback do watch com sender ":1.fake" na hora. A TASK-009
+ * usa esta funcao para provar RF-001 (a row repinta sem Scan em ate 2s);
+ * sem emissao a row permanece inalterada (sinal de falha). */
+static inline void
+bt_helper_emit_page_properties (BtSignalWatch *watch,
+                                const gchar   *mac,
+                                gboolean       paired,
+                                gboolean       connected)
+{
+  gchar    *path;
+  GVariant *dict;
+
+  if (watch == NULL || mac == NULL)
+    return;
+  path = bt_helper_object_path_for_mac (mac);
+  dict = bt_helper_page_dict (paired, connected);
   bt_signal_test_emit (watch, path, dict, ":1.fake");
   g_variant_unref (dict);
   g_free (path);

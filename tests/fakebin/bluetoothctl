@@ -13,6 +13,9 @@
 #   QS_FAKE_BT_INFO_CONNECTED=no estado inicial sem QS_FAKE_BT_STATE
 #   QS_FAKE_BT_STATE=arquivo    estado Connected persistido entre comandos
 #   QS_FAKE_BT_CONNECT_FAIL=1|2 falha connect em stdout|stderr
+#   QS_FAKE_BT_PAIR_FAIL=1|2    falha pair em stdout|stderr
+#   QS_FAKE_BT_TRUST_FAIL=1|2   falha trust em stdout|stderr
+#   QS_FAKE_BT_ALIAS_FAIL=1|2   falha set-alias em stdout|stderr
 #   QS_FAKE_BT_DISCONNECT_FAIL=1|2 falha disconnect em stdout|stderr
 #   QS_FAKE_BT_CONNECT_DELAY_MS=ms connect demora (ms) antes de responder
 #   QS_FAKE_BT_CONNECT_STATE_EARLY=1 connect marca o estado Connected=yes
@@ -189,10 +192,37 @@ case "$1" in
     printf 'Successful disconnected\n'
     ;;
   pair)
+    if [ "${QS_FAKE_BT_PAIR_FAIL:-0}" = "1" ]; then
+      printf 'Failed to pair: org.bluez.Error.AuthenticationFailed\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_PAIR_FAIL:-0}" = "2" ]; then
+      printf 'Failed to pair: org.bluez.Error.AuthenticationFailed\n' >&2
+      exit 0
+    fi
     printf 'Pairing successful\n'
     ;;
   trust)
+    if [ "${QS_FAKE_BT_TRUST_FAIL:-0}" = "1" ]; then
+      printf 'Failed to trust: org.bluez.Error.Failed\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_TRUST_FAIL:-0}" = "2" ]; then
+      printf 'Failed to trust: org.bluez.Error.Failed\n' >&2
+      exit 0
+    fi
     printf 'Changing %s trust succeeded\n' "$2"
+    ;;
+  set-alias)
+    if [ "${QS_FAKE_BT_ALIAS_FAIL:-0}" = "1" ]; then
+      printf 'Failed to set alias: org.bluez.Error.Failed\n'
+      exit 0
+    fi
+    if [ "${QS_FAKE_BT_ALIAS_FAIL:-0}" = "2" ]; then
+      printf 'Failed to set alias: org.bluez.Error.Failed\n' >&2
+      exit 0
+    fi
+    printf 'Changing %s alias succeeded\n' "$2"
     ;;
   power)
     exit 0
