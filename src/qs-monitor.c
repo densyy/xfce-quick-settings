@@ -11,11 +11,13 @@
  *
  * Query:  xrandr --query            (connected outputs + their modes)
  * Mode:   xrandr --output MON --mode MODE
- * Scale:  xrandr --output MON --scale FxF
- * --scale chosen over --scale-from: --scale takes the UI factor directly
- * (1.5 -> "1.5x1.5"); --scale-from would need per-monitor pixel math to
- * express the same factor. xrandr accepts any positive factor, so every
- * entry in SCALE_FACTORS is valid (nothing to filter).
+ * Scale:  xrandr --output MON --scale IxI (I = 1 / factor)
+ * --scale chosen over --scale-from: --scale-from would need per-monitor
+ * pixel math to express the same factor. xrandr accepts any positive
+ * factor, so every entry in SCALE_FACTORS is valid (nothing to filter).
+ * The UI factor is XFCE-style (bigger = zoom in); xrandr --scale grows
+ * the framebuffer (bigger = zoom out), so the inverse is sent
+ * (1.25 -> "0.8x0.8").
  * Without xrandr every combo shows "unavailable" and stays insensitive.
  * Queries run via run_command_async; applies via spawn_command: the
  * panel never blocks.
@@ -391,6 +393,23 @@ on_mode_changed (GtkComboBox *combo,
   display_update_sub (qs, mon, mode);
 }
 
+/* XFCE-style scale (bigger = zoom in) is the inverse of xrandr --scale
+ * (bigger framebuffer = zoom out), so send I = 1 / factor. Fixed table
+ * keeps the command deterministic and testable. */
+static const gchar *
+scale_inverse (const gchar *factor)
+{
+  if (g_strcmp0 (factor, "1.25") == 0)
+    return "0.8";
+  if (g_strcmp0 (factor, "1.5") == 0)
+    return "0.667";
+  if (g_strcmp0 (factor, "1.75") == 0)
+    return "0.571";
+  if (g_strcmp0 (factor, "2") == 0)
+    return "0.5";
+  return "1";
+}
+
 void
 on_scale_changed (GtkComboBox *combo,
                   gpointer     user_data)
@@ -398,6 +417,7 @@ on_scale_changed (GtkComboBox *combo,
   QuickSettings *qs = user_data;
   const gchar   *mon;
   const gchar   *factor;
+  const gchar   *inv;
   gchar         *qmon;
   gchar         *cmd;
 
@@ -409,9 +429,10 @@ on_scale_changed (GtkComboBox *combo,
   factor = gtk_combo_box_get_active_id (combo);
   if (!valid_monitor_shared (mon) || !valid_scale (factor))
     return;
+  inv = scale_inverse (factor);
   qmon = g_shell_quote (mon);
   cmd = g_strdup_printf ("xrandr --output %s --scale %sx%s",
-                         qmon, factor, factor);
+                         qmon, inv, inv);
   g_free (qmon);
   spawn_command (cmd);
   g_free (cmd);

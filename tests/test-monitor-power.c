@@ -485,14 +485,15 @@ test_load_and_select (void)
   run_loop_ms (100);
   g_assert_cmpuint (log_count (&f, " --mode "), ==, 0);
 
-  /* Escala: caminho válido. */
+  /* Escala: caminho válido (fator XFCE invertido p/ xrandr --scale). */
   g_assert_true (gtk_combo_box_set_active_id (GTK_COMBO_BOX (f.qs->mon_combo),
                                               "DP-1"));
   run_loop_ms (50);
   log_clear (&f);
   g_assert_true (gtk_combo_box_set_active_id (GTK_COMBO_BOX (f.qs->scale_combo),
                                               "1.5"));
-  g_assert_true (wait_log (&f, "xrandr --output DP-1 --scale 1.5x1.5", 3000));
+  g_assert_true (wait_log (&f, "xrandr --output DP-1 --scale 0.667x0.667",
+                           3000));
 
   /* Escala: guards updating/insensível/fator inválido/mon inválido. */
   f.qs->updating = TRUE;
