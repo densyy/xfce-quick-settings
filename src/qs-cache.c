@@ -2,6 +2,11 @@
 #include "qs-ui.h"
 #include <sys/stat.h>
 
+/* Validadores de qs-monitor-data.c; forward declaration em vez do header
+ * para não trazer o array estático SCALE_FACTORS para esta TU. */
+gboolean valid_monitor_shared (const gchar *s);
+gboolean valid_scale (const gchar *s);
+
 static gchar *
 cache_path (void)
 {
@@ -151,6 +156,25 @@ save_bt (GKeyFile *kf, QuickSettings *qs, gint64 now)
   ensure_present_ts (kf, "bluetooth", "connected_ts");
 }
 
+static void
+save_display (GKeyFile *kf, QuickSettings *qs)
+{
+  const gchar *mon = NULL;
+  const gchar *factor = NULL;
+  gchar       *key;
+
+  if (qs->mon_combo != NULL)
+    mon = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->mon_combo));
+  if (qs->scale_combo != NULL)
+    factor = gtk_combo_box_get_active_id (GTK_COMBO_BOX (qs->scale_combo));
+  if (valid_monitor_shared (mon) && valid_scale (factor))
+    {
+      key = g_strdup_printf ("scale_%s", mon);
+      g_key_file_set_string (kf, "display", key, factor);
+      g_free (key);
+    }
+}
+
 void
 qs_cache_save (QuickSettings *qs)
 {
@@ -169,6 +193,7 @@ qs_cache_save (QuickSettings *qs)
 
   save_wifi (kf, qs, now);
   save_bt (kf, qs, now);
+  save_display (kf, qs);
 
   ensure_present_int (kf, "audio", "volume", 50);
   ensure_present_bool (kf, "audio", "mute", FALSE);
@@ -246,6 +271,34 @@ read_string (GKeyFile *kf, const gchar *group, const gchar *key)
       return NULL;
     }
   return str;
+}
+
+gchar *
+qs_cache_read_display_scale (const gchar *output)
+{
+  gchar    *path;
+  GKeyFile *kf;
+  gchar    *key;
+  gchar    *value = NULL;
+
+  if (!valid_monitor_shared (output))
+    return NULL;
+  path = cache_path ();
+  kf = g_key_file_new ();
+  if (g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL))
+    {
+      key = g_strdup_printf ("scale_%s", output);
+      value = read_string (kf, "display", key);
+      if (!valid_scale (value))
+        {
+          g_free (value);
+          value = NULL;
+        }
+      g_free (key);
+    }
+  g_key_file_free (kf);
+  g_free (path);
+  return value;
 }
 
 static void

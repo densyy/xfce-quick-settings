@@ -8,4 +8,7 @@ void qs_cache_load (QuickSettings *qs);        /* main thread; aplica nos widget
 void qs_cache_save (QuickSettings *qs);        /* main thread; escrita atômica */
 void qs_cache_schedule_save (QuickSettings *qs); /* debounce 500ms via g_timeout_add */
 void qs_cache_stop (void);                     /* cancela debounce pendente (teardown) */
+/* Lê a escala salva de uma saída ("display"/scale_<output>); owned, NULL
+ * quando ausente ou inválida. Usado ao preencher o combo de escala. */
+gchar *qs_cache_read_display_scale (const gchar *output);
 #endif

@@ -1,5 +1,6 @@
 #include "qs-display.h"
 #include "qs-monitor-data.h"
+#include "qs-cache.h"
 #include "qs-ui.h"
 #include "qs-util.h"
 
@@ -140,11 +141,45 @@ display_unavailable (QuickSettings *qs)
   qs->updating = FALSE;
 }
 
-static void
-fill_scale_combo (QuickSettings *qs)
-{
-  gsize i;
+static const gchar *scale_inverse (const gchar *factor);
 
+static void
+reapply_saved_scale (const gchar *mon)
+{
+  gchar       *saved;
+  const gchar *inv;
+  gchar       *qmon;
+  gchar       *cmd;
+
+  if (!valid_monitor_shared (mon))
+    return;
+  saved = qs_cache_read_display_scale (mon);
+  if (!valid_scale (saved) || g_strcmp0 (saved, "1") == 0)
+    {
+      g_free (saved);
+      return;
+    }
+  inv = scale_inverse (saved);
+  qmon = g_shell_quote (mon);
+  cmd = g_strdup_printf ("xrandr --output %s --scale %sx%s", qmon, inv, inv);
+  g_free (qmon);
+  spawn_command (cmd);
+  g_free (cmd);
+  g_free (saved);
+}
+
+static void
+fill_scale_combo (QuickSettings *qs,
+                  const gchar   *mon)
+{
+  gsize        i;
+  gchar       *saved = NULL;
+  const gchar *active = "1";
+
+  if (valid_monitor_shared (mon))
+    saved = qs_cache_read_display_scale (mon);
+  if (saved != NULL && valid_scale (saved))
+    active = saved;
   gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (qs->scale_combo));
   for (i = 0; i < G_N_ELEMENTS (SCALE_FACTORS); i++)
     {
@@ -154,8 +189,9 @@ fill_scale_combo (QuickSettings *qs)
                                  SCALE_FACTORS[i], label);
       g_free (label);
     }
-  gtk_combo_box_set_active_id (GTK_COMBO_BOX (qs->scale_combo), "1");
+  gtk_combo_box_set_active_id (GTK_COMBO_BOX (qs->scale_combo), active);
   gtk_widget_set_sensitive (qs->scale_combo, TRUE);
+  g_free (saved);
 }
 
 static void
@@ -189,7 +225,8 @@ query_fill_selection (QuickSettings *qs,
     }
   else
     fill_combo (qs->mode_combo, NULL, NULL, "No modes");
-  fill_scale_combo (qs);
+  fill_scale_combo (qs, sel);
+  reapply_saved_scale (sel);
   gtk_label_set_text (GTK_LABEL (qs->display_status), NULL);
   if (sel_mon != NULL && sel_mon->active)
     display_update_sub (qs, sel, shown_mode);
@@ -320,7 +357,8 @@ on_mon_changed (GtkComboBox *combo,
           : (sel_mon->modes != NULL
              ? (const gchar *) sel_mon->modes->data : NULL);
   fill_combo (qs->mode_combo, sel_mon->modes, shown, "No modes");
-  fill_scale_combo (qs);
+  fill_scale_combo (qs, id);
+  reapply_saved_scale (id);
   gtk_label_set_text (GTK_LABEL (qs->display_status), NULL);
   if (sel_mon->active)
     display_update_sub (qs, id, shown);
@@ -400,6 +438,7 @@ on_scale_changed (GtkComboBox *combo,
   g_free (qmon);
   spawn_command (cmd);
   g_free (cmd);
+  qs_cache_schedule_save (qs);
 }
 
 typedef struct
